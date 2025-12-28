@@ -1,60 +1,42 @@
 # app/services/l1_perception.py
-
-import pandas as pd
-import numpy as np
 from .. import config
 
 class PerceptionService:
-    def analyze_bar(self, candle, prev_candle=None):
+    # [修改] 增加 atr 参数
+    def analyze_bar(self, candle, prev_candle, atr):
         """
-        分析单根 K 线的原子特征
+        基于 ATR 判断 K 线强弱，不再用固定美金
         """
-        open_p = candle.open
-        close_p = candle.close
-        high_p = candle.high
-        low_p = candle.low
+        body = abs(candle.close - candle.open)
+        rng = candle.high - candle.low
+        if rng == 0: rng = 0.001
         
-        body_size = abs(close_p - open_p)
-        total_range = high_p - low_p
-        if total_range == 0: total_range = 0.0001 # 防除零
+        # 1. 动能 (Momentum) - 自适应
+        # 如果当前 ATR 是 6.0，那么实体 > 3.6 (0.6倍) 才算趋势K线
+        # 如果用以前的 2.0 标准，现在全是趋势K线，那就乱套了
+        is_trend_bar = body > (atr * config.AB_TREND_BAR_ATR_RATIO)
         
-        # 1. Control (控制权)
-        # 收盘价在 K 线幅度的位置 (0.0 = Low, 1.0 = High)
-        close_position = (close_p - low_p) / total_range
-        
+        # 2. 控制权 (Control)
+        close_pos = (candle.close - candle.low) / rng
         control = "NEUTRAL"
-        if close_position >= (1.0 - config.AB_CLOSE_ZONE):
-            control = "BULL_CONTROL" # 收在最高处
-        elif close_position <= config.AB_CLOSE_ZONE:
-            control = "BEAR_CONTROL" # 收在最低处
-            
-        # 2. Momentum (动能)
-        # 实体大小相对于平均值
-        is_trend_bar = False
-        if body_size > config.AB_AVG_BODY_SIZE * config.AB_STRONG_BAR_RATIO:
-            is_trend_bar = True
-            
-        # 3. Rejection (拒绝/影线)
-        # 上影线
-        upper_tail = high_p - max(open_p, close_p)
-        upper_tail_ratio = upper_tail / total_range
-        
-        # 下影线
-        lower_tail = min(open_p, close_p) - low_p
-        lower_tail_ratio = lower_tail / total_range
+        if close_pos > 0.8: control = "BULL"
+        elif close_pos < 0.2: control = "BEAR"
+
+        # 3. 拒绝 (Rejection)
+        upper_wick = candle.high - max(candle.open, candle.close)
+        lower_wick = min(candle.open, candle.close) - candle.low
         
         has_rejection = False
         rejection_type = "NONE"
         
-        if upper_tail_ratio > config.AB_TAIL_RATIO:
+        if upper_wick > body and upper_wick > (rng * 0.4):
             has_rejection = True
-            rejection_type = "TOP_TAIL" # 上方抛压
-        elif lower_tail_ratio > config.AB_TAIL_RATIO:
+            rejection_type = "TOP_TAIL"
+        elif lower_wick > body and lower_wick > (rng * 0.4):
             has_rejection = True
-            rejection_type = "BOTTOM_TAIL" # 下方买盘
-        
+            rejection_type = "BOTTOM_TAIL"
+            
         # 4. Overlap (重叠度) - 用于判断震荡
-        # 计算当前K线 High/Low 与 前一根 High/Low 的重叠部分
         overlap_pct = 0.0
         if prev_candle:
             overlap_max = min(candle.high, prev_candle.high)
@@ -64,19 +46,11 @@ class PerceptionService:
                 prev_rng = prev_candle.high - prev_candle.low
                 if prev_rng > 0:
                     overlap_pct = overlap_len / prev_rng
-            
+                
         return {
             "control": control,
             "is_trend_bar": is_trend_bar,
             "has_rejection": has_rejection,
             "rejection_type": rejection_type,
-            "close_position": close_position,
-            "overlap": overlap_pct  # 新增重叠度
+            "overlap": overlap_pct
         }
-
-    def analyze_recent_sequence(self, candles_list):
-        """
-        分析最近的一组 K 线 (用于判断强趋势)
-        """
-        features = [self.analyze_bar(c) for c in candles_list]
-        return features

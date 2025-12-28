@@ -23,7 +23,7 @@ logger = logging.getLogger("AB_Agent")
 app = FastAPI(
     title="Al Brooks Gold Agent",
     version="2.0.0",
-    description="XAUUSD 智能交易 - Al Brooks Price Action 体系 (4-Stage)"
+    description="XAUUSD 智能交易 - Al Brooks Price Action 体系 (4-Stage, ATR-Adaptive)"
 )
 
 # 实例化所有服务
@@ -34,14 +34,22 @@ l3_svc = ContextService()
 l4_svc = ProbabilityService()
 l5_svc = ExecutionService()
 
-# 辅助: 计算 ATR
-def quick_atr(candles):
-    if not candles: return 1.0
+# 辅助函数: 计算当前 ATR (14)
+def calculate_atr(candles, period=14):
+    if not candles or len(candles) < period + 1:
+        return 5.0 # 默认值，防报错
+    
     df = pd.DataFrame([c.dict() for c in candles])
-    df['tr'] = np.maximum(df['high'] - df['low'], 
-               np.maximum(abs(df['high'] - df['close'].shift(1)), 
-                          abs(df['low'] - df['close'].shift(1))))
-    return df['tr'].rolling(14).mean().iloc[-1]
+    # 标准 TR 计算
+    df['h-l'] = df['high'] - df['low']
+    df['h-pc'] = abs(df['high'] - df['close'].shift(1))
+    df['l-pc'] = abs(df['low'] - df['close'].shift(1))
+    df['tr'] = df[['h-l', 'h-pc', 'l-pc']].max(axis=1)
+    
+    current_atr = df['tr'].rolling(period).mean().iloc[-1]
+    # 处理可能的 NaN
+    if pd.isna(current_atr): return 5.0
+    return current_atr
 
 @app.get("/health")
 def health_check():
@@ -53,29 +61,25 @@ def analyze_market(data: MarketData):
     # 0. 全局风控 (L0)
     is_safe, safety_reason = risk_svc.check_safety(data)
     if not is_safe:
-        # 如果触发熔断，且配置了强平
         if "CIRCUIT_BREAKER" in safety_reason and config.FORCE_CLOSE_ON_DRAWDOWN and data.current_positions:
              return SignalResponse(action="CLOSE_POS", ticket=data.current_positions[0].ticket, reason=safety_reason)
-        
         return SignalResponse(action="HOLD", reason=f"RISK:{safety_reason}")
 
-    # 1. 仓位管理 (0.02 / 0.04)
+    # 1. 仓位管理
     current_vol = sum([p.volume for p in data.current_positions])
     
-    # [减仓逻辑] 如果有持仓，且浮盈很大，可以减仓
-    # 简单示范: 如果持仓 >= 0.02 且盈利 > 5美金，减半仓
+    # 减仓逻辑
     if data.current_positions:
         pos = data.current_positions[0]
-        profit_usd = pos.profit  # 浮动盈亏 (美金)
+        profit_usd = pos.profit
         if pos.volume >= 0.02 and profit_usd > 5.0 and "PARTIAL" not in pos.comment:
              return SignalResponse(
                  action="CLOSE_PARTIAL", 
                  ticket=pos.ticket, 
-                 lot=config.PARTIAL_CLOSE_LOT, # 平 0.01
+                 lot=config.PARTIAL_CLOSE_LOT, 
                  reason="Take_Partial_Profit"
              )
     
-    # 如果持仓已达上限 0.04，禁止开新单
     if current_vol >= config.MAX_TOTAL_VOLUME:
         return SignalResponse(action="HOLD", reason="Max_Volume_Reached")
 
@@ -85,20 +89,21 @@ def analyze_market(data: MarketData):
     
     m5_bars = data.m5_candles
     
-    # 3. 分析流程 (L1 -> L3 -> L2 -> L5)
+    # [新增] 全局计算 ATR
+    current_atr = calculate_atr(m5_bars)
     
-    # L1: 特征 (传入前一根K线用于计算重叠度)
-    bar_feat = l1_svc.analyze_bar(m5_bars[-1], m5_bars[-2])
+    # 3. 分析流程 (全 ATR 化)
     
-    # L3: 识别 4大阶段 (Spike, Channel, TR, Breakout)
-    stage, trend_dir = l3_svc.identify_stage(m5_bars)
+    # L1: 感知 (传入 atr)
+    bar_feat = l1_svc.analyze_bar(m5_bars[-1], m5_bars[-2], current_atr)
     
-    # L2: 识别 Setup (H1/H2)
-    # L2 需要依赖 L3 的 trend_dir 来决定数浪方向
-    structure = l2_svc.update_counter(m5_bars)
+    # L3: 环境 (传入 atr)
+    stage, trend_dir = l3_svc.identify_stage(m5_bars, current_atr)
     
-    # L5: 生成挂单
-    current_atr = quick_atr(m5_bars)
+    # L2: 结构 (传入 L3 trend 和 atr)
+    structure = l2_svc.update_counter(m5_bars, trend_dir, current_atr)
+    
+    # L5: 执行 (传入 atr)
     action, lot, entry_price, sl, tp, exec_reason = l5_svc.generate_order(
         stage, trend_dir, structure.get('setup', 'NONE'), m5_bars, current_atr
     )
@@ -106,7 +111,7 @@ def analyze_market(data: MarketData):
     # 组合最终理由
     final_reason = f"{stage}|{structure.get('setup', 'NONE')}|{exec_reason}"
     
-    logger.info(f"Decision: {action} | {final_reason}")
+    logger.info(f"Decision: {action} | ATR:{current_atr:.2f} | {final_reason}")
     
     return SignalResponse(
         action=action,
