@@ -1,0 +1,48 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+.env
+.venv/
+
+# IDE settings
+.vscode/
+.idea/
+
+# --- FX Agent Specific ---
+# 忽略所有日志文件
+*.log
+logs/
+
+# 忽略 MT5 编译文件 (只保留 .mq5 源码)
+*.ex5
+
+# 忽略 Windows/Mac 系统文件
+Thumbs.db
+.DS_Store
