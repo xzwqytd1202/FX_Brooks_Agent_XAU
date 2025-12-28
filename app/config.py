@@ -7,7 +7,7 @@ SERVER_PORT = 8002
 
 # --- 仓位管理 ---
 BASE_LOT_SIZE = 0.02
-MAX_TOTAL_VOLUME = 0.04
+MAX_TOTAL_VOLUME = 0.1
 PARTIAL_CLOSE_LOT = 0.01
 
 # --- 风险管理 ---
