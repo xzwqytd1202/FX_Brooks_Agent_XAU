@@ -100,7 +100,7 @@ def analyze_market(data: MarketData):
     # L5: 生成挂单
     current_atr = quick_atr(m5_bars)
     action, lot, entry_price, sl, tp, exec_reason = l5_svc.generate_order(
-        stage, trend_dir, structure.get('setup', 'NONE'), m5_bars[-1], current_atr
+        stage, trend_dir, structure.get('setup', 'NONE'), m5_bars, current_atr
     )
     
     # 组合最终理由

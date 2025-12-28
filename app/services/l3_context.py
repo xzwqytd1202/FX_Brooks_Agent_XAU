@@ -51,32 +51,36 @@ class ContextService:
         last_3_bars = df.tail(3)
         strong_momentum = all(abs(last_3_bars['close'] - last_3_bars['open']) > config.AB_AVG_BODY_SIZE)
 
-        # --- 阶段判定逻辑 (优先级: 1 -> 4 -> 3 -> 2) ---
+        # 定义阈值 (可以放入 config)
+        SLOPE_SPIKE = 0.8       # 强趋势斜率阈值
+        SLOPE_FLAT = 0.15       # 震荡斜率阈值
+        CROSSING_LIMIT = 5      # 穿越均线次数阈值
         
-        stage = "3-TRADING_RANGE" # 默认
-        trend_dir = "NEUTRAL"
+        # --- 核心判断逻辑 (优先级漏斗) ---
         
-        # 判定 1: Strong Trend (Spike)
-        # 斜率极大，且有连续强K线
-        if abs(slope) > 1.0 and strong_momentum:
+        # 1. [最高优先级] Strong Trend (Spike)
+        # 必须具备: 极陡的斜率 AND 强劲的动能
+        if abs(slope) > SLOPE_SPIKE and strong_momentum:
             stage = "1-STRONG_TREND"
             trend_dir = "BULL" if slope > 0 else "BEAR"
             return stage, trend_dir
-            
-        # 判定 4: Breakout Mode
-        # 极度压缩，均线走平
-        if is_compressed and abs(slope) < 0.2:
+
+        # 2. [第二优先级] Breakout Mode (TTR)
+        # 必须具备: 极度压缩 (均线斜率通常也很小)
+        if is_compressed:
             stage = "4-BREAKOUT_MODE"
-            return stage, "NEUTRAL"
+            # 此时方向不明，但需给出一个微观倾向用于挂单
+            trend_dir = "BULL" if df['close'].iloc[-1] > df['ema20'].iloc[-1] else "BEAR"
+            return stage, trend_dir
             
-        # 判定 3: Trading Range
-        # 均线走平 (斜率低)，或者 价格反复穿梭均线
-        if abs(slope) < config.AB_RANGE_EMA_SLOPE or crossings >= config.AB_RANGE_CROSSINGS:
+        # 3. [第三优先级] Trading Range (区间)
+        # 具备: 均线走平 OR 反复穿梭 (混乱)
+        if abs(slope) < SLOPE_FLAT or crossings >= CROSSING_LIMIT:
             stage = "3-TRADING_RANGE"
             return stage, "NEUTRAL"
             
-        # 判定 2: Weak Trend (Channel)
-        # 斜率适中，价格在均线一侧运行 (穿越少)
+        # 4. [默认] Channel (通道/弱趋势)
+        # 既然不是强趋势，也不是震荡，那就是有方向的弱趋势
         stage = "2-CHANNEL"
         trend_dir = "BULL" if slope > 0 else "BEAR"
         
