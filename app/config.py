@@ -2,7 +2,7 @@
 
 # --- 基础设置 ---
 SYMBOL_NAME = "XAUUSD"
-MAGIC_NUMBER = 999999
+MAGIC_NUMBER = 251211979
 
 # --- [1] 时间设置 (北京时间) ---
 IS_WINTER_TIME = True  
