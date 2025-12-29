@@ -1,4 +1,3 @@
-# app/main.py
 from fastapi import FastAPI
 from .schemas import MarketData, SignalResponse
 from .services.global_risk import GlobalRiskService
@@ -10,6 +9,10 @@ from . import config
 import logging
 import pandas as pd
 import numpy as np
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 risk_svc = GlobalRiskService()
@@ -66,17 +69,29 @@ def analyze_market(data: MarketData):
     # 3. 分析流程
     m5_bars = data.m5_candles
     
+    # L1: K 线特征分析 (用于增强日志)
+    last_bar = m5_bars[-1]
+    prev_bar = m5_bars[-2] if len(m5_bars) > 1 else None
+    bar_analysis = l1_svc.analyze_bar(last_bar, prev_bar, current_atr)
+    
     # [修改] L3 传入 h1_candles 以判断 Always In
     stage, trend_dir = l3_svc.identify_stage(m5_bars, data.h1_candles, current_atr)
     
     structure = l2_svc.update_counter(m5_bars, trend_dir, current_atr)
     
     # Setup 过滤
-    if "IGNORE" in structure.get('setup', '') or "TOO_FAR" in structure.get('setup', ''):
+    if "IGNORE" in structure.get('setup', '') or "TOO_FAR" in structure.get('setup', '') or "RESET" in structure.get('setup', ''):
+        logger.info(f"[FILTER] Setup={structure['setup']}, Stage={stage}, Trend={trend_dir}")
         return SignalResponse(action="HOLD", reason=f"Weak_Setup_{structure['setup']}")
     
     action, lot, entry, sl, tp, reason = l5_svc.generate_order(
         stage, trend_dir, structure.get('setup', 'NONE'), m5_bars, current_atr
     )
+    
+    # 日志记录决策
+    if action != "HOLD":
+        logger.info(f"[SIGNAL] Action={action}, Stage={stage}, Setup={structure['setup']}, "
+                    f"Entry={entry:.2f}, SL={sl:.2f}, TP={tp:.2f}, Lot={lot}, "
+                    f"Bar=[Ctrl:{bar_analysis['control']}, Trend:{bar_analysis['is_trend_bar']}, Rej:{bar_analysis['rejection_type']}]")
     
     return SignalResponse(action=action, lot=lot, entry_price=entry, sl=sl, tp=tp, reason=reason)

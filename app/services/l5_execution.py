@@ -114,7 +114,7 @@ class ExecutionService:
 
         # --- 特殊反转形态 (Wedge & MTR) ---
         # 插入在 Stage 2/3 之前
-        if "WEDGE" in setup_type or "MTR" in setup_type:
+        elif "WEDGE" in setup_type or "MTR" in setup_type:
             
             # 1. 顶部反转 (Wedge Top OR MTR Top)
             if setup_type in ["WEDGE_TOP", "MTR_TOP"]:

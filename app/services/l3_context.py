@@ -62,12 +62,14 @@ class ContextService:
             elif h1_slope < 0: always_in_dir = "BEAR"
 
         # --- 3. 综合阶段判定 ---
-        if is_barbwire:
-            return "0-BARBWIRE", "NEUTRAL"
-            
-        # Stage 1: Spike (M5 自己很强)
+        
+        # Stage 1: Spike (M5 自己很强) - 最高优先级
         if abs(norm_slope) > config.SLOPE_SPIKE_ATR and strong_momentum:
             return "1-STRONG_TREND", ("BULL" if norm_slope > 0 else "BEAR")
+
+        # Barbwire 检测 - 放在 Spike 之后，避免错过突破
+        if is_barbwire:
+            return "0-BARBWIRE", "NEUTRAL"
 
         # Stage 4: Breakout Mode (M5 压缩)
         if is_compressed:

@@ -115,8 +115,11 @@ class StructureService:
         # 3. [新增] MTR (主要趋势反转) 升级检测
         # =========================================================
         # 逻辑: 如果当前是 H2/L2，且之前发生过"趋势线突破"(EMA Break)，则升级为 MTR
+        # 关键修正: MTR 发生在 M5 产生回调信号时，需要检测历史上是否有过 EMA 突破
+        # H2 setup = M5 在 BULL 趋势中回调, 如果历史上有 Bear Break EMA, 这可能是 MTR Bottom
+        # L2 setup = M5 在 BEAR 趋势中回调, 如果历史上有 Bull Break EMA, 这可能是 MTR Top
         if setup in ["H2", "L2"]:
-            is_mtr = self._check_mtr_signal(df, trend_dir, atr, setup)
+            is_mtr = self._check_mtr_signal(df, atr, setup)
             if is_mtr:
                 if setup == "H2": setup = "MTR_BOTTOM" # 底部反转
                 elif setup == "L2": setup = "MTR_TOP"  # 顶部反转
@@ -130,10 +133,16 @@ class StructureService:
     # ------------------------------------------------------------------
     # 辅助: 检测 MTR 前置条件 (趋势线突破)
     # ------------------------------------------------------------------
-    def _check_mtr_signal(self, df, trend_dir, atr, current_setup):
+    def _check_mtr_signal(self, df, atr, current_setup):
         """
         MTR = Break of Trend Line (EMA) + Test of Extreme (H2/L2)
         这里负责检测 'Break' 部分
+        
+        修正: 
+        - H2 setup 意味着 M5 在多头回调, 我们寻找之前是否有过强阴线打破 EMA (Bear Break)
+          如果有，说明曾经尝试反转，现在 H2 可能是 MTR Bottom
+        - L2 setup 意味着 M5 在空头回调, 我们寻找之前是否有过强阳线打破 EMA (Bull Break)
+          如果有，说明曾经尝试反转，现在 L2 可能是 MTR Top
         """
         # 回溯 30 根 K 线寻找"强力突破"
         lookback = 30
@@ -143,25 +152,24 @@ class StructureService:
         history = df.iloc[-lookback:-5]
         has_break = False
         
-        # 寻找 Break: 实体大(>0.6 ATR) 且 收盘穿越 EMA
-        if trend_dir == "BEAR" and current_setup == "H2":
-            # 这是一个潜在底部反转 (Bottom MTR)
-            # 寻找之前是否有: 强阳线 + 收盘在 EMA 上方
+        if current_setup == "H2":
+            # H2 = 多头回调中的第二腿, 寻找之前是否有 Bear Break (曾经空头占优)
+            # 这样 H2 就变成了从空头 -> 多头的 MTR Bottom
             for i in range(len(history)):
                 bar = history.iloc[i]
-                is_strong = (bar['close'] - bar['open']) > (atr * 0.6)
-                break_ema = bar['close'] > bar['ema20']
-                if is_strong and break_ema:
+                is_strong_bear = (bar['open'] - bar['close']) > (atr * 0.6)
+                break_ema_down = bar['close'] < bar['ema20']
+                if is_strong_bear and break_ema_down:
                     has_break = True; break
                     
-        elif trend_dir == "BULL" and current_setup == "L2":
-            # 这是一个潜在顶部反转 (Top MTR)
-            # 寻找之前是否有: 强阴线 + 收盘在 EMA 下方
+        elif current_setup == "L2":
+            # L2 = 空头回调中的第二腿, 寻找之前是否有 Bull Break (曾经多头占优)
+            # 这样 L2 就变成了从多头 -> 空头的 MTR Top
             for i in range(len(history)):
                 bar = history.iloc[i]
-                is_strong = (bar['open'] - bar['close']) > (atr * 0.6)
-                break_ema = bar['close'] < bar['ema20']
-                if is_strong and break_ema:
+                is_strong_bull = (bar['close'] - bar['open']) > (atr * 0.6)
+                break_ema_up = bar['close'] > bar['ema20']
+                if is_strong_bull and break_ema_up:
                     has_break = True; break
                     
         return has_break
