@@ -45,6 +45,10 @@ class ExecutionService:
         bar_height = signal_bar.high - signal_bar.low
         is_huge_bar = bar_height > (atr * 3.0)
 
+        # [新增] 铁丝网: 坚决不做
+        if stage == "0-BARBWIRE":
+            return "HOLD", 0.0, 0.0, 0.0, 0.0, "Barbwire_Chop"
+
         # --- Stage 1: Spike (强趋势) ---
         if "1-STRONG_TREND" in stage:
             # A. 顺势逻辑 (原有: Stop Order 追单)

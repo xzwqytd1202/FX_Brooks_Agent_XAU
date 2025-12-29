@@ -96,6 +96,21 @@ class StructureService:
                     if (is_matching_high or is_inside_bar) and is_strong_close:
                         setup = "L1_MICRO_DT"
 
+        # --- [新增] 破坏性重置逻辑 ---
+        # 如果我们正在寻找多头信号 (H1/H2)，但眼前这根是巨大的阴线趋势棒
+        # 这说明回调可能变成了反转，之前的计数失效
+        is_huge_bear = (last['close'] < last['open']) and \
+                       (last['open'] - last['close']) > (atr * 1.5)
+        
+        if trend_dir == "BULL" and is_huge_bear:
+            setup = "RESET_BY_BEAR_SPIKE"
+            
+        # 空头同理
+        is_huge_bull = (last['close'] > last['open']) and \
+                       (last['close'] - last['open']) > (atr * 1.5)
+        if trend_dir == "BEAR" and is_huge_bull:
+            setup = "RESET_BY_BULL_SPIKE"
+
         # =========================================================
         # 3. [新增] MTR (主要趋势反转) 升级检测
         # =========================================================

@@ -31,6 +31,19 @@ class ContextService:
         recent_low = df['low'].tail(10).min()
         is_compressed = (recent_high - recent_low) < (current_atr * config.COMPRESSION_ATR)
         
+        # [新增] Barbwire (铁丝网) 检测
+        # 特征: 过去 5 根 K 线里，至少 3 根是十字星 (实体 < 0.3 ATR) 且 重叠严重
+        recent_5 = df.tail(5)
+        doji_count = 0
+        for _, row in recent_5.iterrows():
+            body = abs(row['close'] - row['open'])
+            if body < (current_atr * 0.3):
+                doji_count += 1
+        
+        is_barbwire = False
+        if doji_count >= 3 and is_compressed:
+            is_barbwire = True
+        
         # 强趋势因子
         last_3 = df.tail(3)
         bodies = abs(last_3['close'] - last_3['open'])
@@ -49,7 +62,9 @@ class ContextService:
             elif h1_slope < 0: always_in_dir = "BEAR"
 
         # --- 3. 综合阶段判定 ---
-        
+        if is_barbwire:
+            return "0-BARBWIRE", "NEUTRAL"
+            
         # Stage 1: Spike (M5 自己很强)
         if abs(norm_slope) > config.SLOPE_SPIKE_ATR and strong_momentum:
             return "1-STRONG_TREND", ("BULL" if norm_slope > 0 else "BEAR")
