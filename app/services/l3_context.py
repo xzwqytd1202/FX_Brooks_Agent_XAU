@@ -4,14 +4,14 @@ import numpy as np
 from .. import config
 
 class ContextService:
-    def identify_stage(self, m5_candles, h1_candles, current_atr):
+    def identify_stage(self, df_m5, h1_candles, current_atr):
         """
         引入 H1 数据来模拟 Al Brooks 的 "Always In" 大局观
         """
-        if len(m5_candles) < 21: return "UNKNOWN", "WAIT"
+        if len(df_m5) < 21: return "UNKNOWN", "WAIT"
             
-        df = pd.DataFrame([c.dict() for c in m5_candles])
-        df['ema20'] = df['close'].rolling(20).mean()
+        # df_m5 已经包含 ema20
+        df = df_m5
         
         # --- 1. M5 基础因子计算 ---
         current_ema = df['ema20'].iloc[-1]

@@ -3,35 +3,33 @@ from .. import config
 import math
 
 class ExecutionService:
-    def _calculate_dynamic_thresholds(self, candles, ema20_val):
+    def _calculate_dynamic_thresholds(self, df_recent, ema20_val):
         """
         计算动态的高潮阈值
         """
         # 1. 计算过去 50 根 K 线的"价格-EMA距离"的标准差 (SD)
         # 这反映了当前的"乖离率波动范围"
-        dists = [abs(c.close - ema20_val) for c in candles[-50:]] # 近期样本
-        if not dists: return 999.0, 999.0 # 异常
+        dists = (df_recent['close'] - ema20_val).abs()
         
-        avg_dist = sum(dists) / len(dists)
+        if len(dists) == 0: return 999.0, 999.0
         
-        # 计算标准差 (Standard Deviation)
-        variance = sum([((x - avg_dist) ** 2) for x in dists]) / len(dists)
-        std_dev_dist = math.sqrt(variance)
+        avg_dist = dists.mean()
+        std_dev_dist = dists.std()
         
         # 动态乖离阈值: 平均乖离 + 3倍标准差 (99.7% 置信度)
-        # 如果当前偏离度超过这个值，说明是极小概率事件 -> 适宜左侧
         threshold_extension = avg_dist + (3.0 * std_dev_dist)
         
         # 2. 计算过去 50 根 K 线的"最大实体"
-        bodies = [abs(c.close - c.open) for c in candles[-50:-1]] # 排除当前这根
-        max_body_recent = max(bodies) if bodies else 0.0
+        bodies = (df_recent['close'] - df_recent['open']).abs()
+        # 排除当前这根 (因为主要看历史背景)
+        max_body_recent = bodies.iloc[:-1].max() if len(bodies) > 1 else bodies.max()
         
         # 动态巨型K线阈值: 必须比过去50根里最大的还要大 10%
-        threshold_climax_bar = max_body_recent * 1.1
+        threshold_climax_bar = max_body_recent * 1.1 if max_body_recent > 0 else 999.0
         
         return threshold_extension, threshold_climax_bar
 
-    def generate_order(self, stage, trend_dir, setup_type, candles, atr):
+    def generate_order(self, stage, trend_dir, setup_type, df, candles, atr):
         signal_bar = candles[-1]
         
         action = "HOLD"
@@ -68,10 +66,11 @@ class ExecutionService:
             # ==========================================================
             
             # 准备数据
-            ema20_val = sum([c.close for c in candles[-20:]]) / 20
+            ema20_val = df['ema20'].iloc[-1]
             
             # [关键] 获取动态阈值
-            dyn_ext_threshold, dyn_bar_threshold = self._calculate_dynamic_thresholds(candles, ema20_val)
+            df_recent = df.iloc[-50:]
+            dyn_ext_threshold, dyn_bar_threshold = self._calculate_dynamic_thresholds(df_recent, ema20_val)
             
             # 1. 乖离率判断 (使用动态阈值)
             dist_to_ema = signal_bar.close - ema20_val

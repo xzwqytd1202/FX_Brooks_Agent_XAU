@@ -21,22 +21,36 @@ l2_svc = StructureService()
 l3_svc = ContextService()
 l5_svc = ExecutionService()
 
-def calculate_atr(candles, period=14):
+def prepare_market_data(candles, period=14):
+    """
+    统一的数据准备函数:
+    1. 转 DataFrame
+    2. 计算 ATR
+    3. 计算 EMA20 (所有服务公用)
+    """
     if not candles or len(candles) < config.MIN_HISTORY_FOR_ATR:
-        return None 
+        return None, None
     
     df = pd.DataFrame([c.dict() for c in candles])
+    
+    # 1. 计算 ATR
     df['h-l'] = df['high'] - df['low']
     df['h-pc'] = abs(df['high'] - df['close'].shift(1))
     df['l-pc'] = abs(df['low'] - df['close'].shift(1))
     df['tr'] = df[['h-l', 'h-pc', 'l-pc']].max(axis=1)
     current_atr = df['tr'].rolling(period).mean().iloc[-1]
-    return current_atr if pd.notna(current_atr) else 5.0
+    
+    # 2. 计算 EMA20
+    df['ema20'] = df['close'].rolling(20).mean()
+    
+    if pd.isna(current_atr): current_atr = 5.0
+    
+    return df, current_atr
 
 @app.post("/signal", response_model=SignalResponse)
 def analyze_market(data: MarketData):
-    # 1. 计算 ATR (必须放在最前面，因为风控需要它)
-    current_atr = calculate_atr(data.m5_candles)
+    # 1. 统一数据准备
+    df_m5, current_atr = prepare_market_data(data.m5_candles)
     
     # 0. 全局风控 (传入 ATR)
     is_safe, safety_reason = risk_svc.check_safety(data, current_atr)
@@ -74,18 +88,23 @@ def analyze_market(data: MarketData):
     prev_bar = m5_bars[-2] if len(m5_bars) > 1 else None
     bar_analysis = l1_svc.analyze_bar(last_bar, prev_bar, current_atr)
     
-    # [修改] L3 传入 h1_candles 以判断 Always In
-    stage, trend_dir = l3_svc.identify_stage(m5_bars, data.h1_candles, current_atr)
+    # [修改] L3 传入 df_m5 和 h1_candles 以判断 Always In
+    # ContextService.identify_stage(self, df_m5, h1_candles, current_atr)
+    stage, trend_dir = l3_svc.identify_stage(df_m5, data.h1_candles, current_atr)
     
-    structure = l2_svc.update_counter(m5_bars, trend_dir, current_atr)
+    # [修改] L2 传入 df_m5
+    # StructureService.update_counter(self, df, trend_dir, atr)
+    structure = l2_svc.update_counter(df_m5, trend_dir, current_atr)
     
     # Setup 过滤
     if "IGNORE" in structure.get('setup', '') or "TOO_FAR" in structure.get('setup', '') or "RESET" in structure.get('setup', ''):
         logger.info(f"[FILTER] Setup={structure['setup']}, Stage={stage}, Trend={trend_dir}")
         return SignalResponse(action="HOLD", reason=f"Weak_Setup_{structure['setup']}")
     
+    # [修改] L5 传入 df_m5
+    # ExecutionService.generate_order(self, stage, trend_dir, setup_type, df, candles, atr)
     action, lot, entry, sl, tp, reason = l5_svc.generate_order(
-        stage, trend_dir, structure.get('setup', 'NONE'), m5_bars, current_atr
+        stage, trend_dir, structure.get('setup', 'NONE'), df_m5, m5_bars, current_atr
     )
     
     # 日志记录决策

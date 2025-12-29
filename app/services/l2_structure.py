@@ -4,12 +4,11 @@ import numpy as np
 from .. import config
 
 class StructureService:
-    def update_counter(self, m5_candles, trend_dir, atr):
-        if len(m5_candles) < 50:
+    def update_counter(self, df, trend_dir, atr):
+        if len(df) < 50:
             return {"setup": "NONE", "reason": "NO_DATA"}
             
-        df = pd.DataFrame([c.dict() for c in m5_candles])
-        df['ema20'] = df['close'].rolling(20).mean()
+        # df 已经在 main 中生成并包含了 ema20
         
         if trend_dir == "NEUTRAL":
              trend_dir = "BULL" if df['ema20'].iloc[-1] > df['ema20'].iloc[-2] else "BEAR"
