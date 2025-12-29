@@ -110,7 +110,7 @@ string BuildJsonPayload() {
    json += "\"margin_level\":" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN_LEVEL), 2) + ",";
    
    // [确认] M5 发送 100 根，满足 Python Stage 3 的 50 根 ZigZag 回溯需求
-   json += "\"m5_candles\":" + GetCandlesJson(PERIOD_M5, 100) + ",";
+   json += "\"m5_candles\":" + GetCandlesJson(PERIOD_M5, 110) + ",";
    json += "\"news_info\":{\"has_news\":false, \"impact_level\":0, \"minutes_to_news\":999, \"event_name\":\"None\"},"; // 简化新闻，主要靠Python端风控
    json += "\"current_positions\":" + GetPositionsJson();
    
