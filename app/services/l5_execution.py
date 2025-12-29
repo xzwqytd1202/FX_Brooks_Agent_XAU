@@ -3,6 +3,34 @@ from .. import config
 import math
 
 class ExecutionService:
+    def _calculate_dynamic_thresholds(self, candles, ema20_val):
+        """
+        计算动态的高潮阈值
+        """
+        # 1. 计算过去 50 根 K 线的"价格-EMA距离"的标准差 (SD)
+        # 这反映了当前的"乖离率波动范围"
+        dists = [abs(c.close - ema20_val) for c in candles[-50:]] # 近期样本
+        if not dists: return 999.0, 999.0 # 异常
+        
+        avg_dist = sum(dists) / len(dists)
+        
+        # 计算标准差 (Standard Deviation)
+        variance = sum([((x - avg_dist) ** 2) for x in dists]) / len(dists)
+        std_dev_dist = math.sqrt(variance)
+        
+        # 动态乖离阈值: 平均乖离 + 3倍标准差 (99.7% 置信度)
+        # 如果当前偏离度超过这个值，说明是极小概率事件 -> 适宜左侧
+        threshold_extension = avg_dist + (3.0 * std_dev_dist)
+        
+        # 2. 计算过去 50 根 K 线的"最大实体"
+        bodies = [abs(c.close - c.open) for c in candles[-50:-1]] # 排除当前这根
+        max_body_recent = max(bodies) if bodies else 0.0
+        
+        # 动态巨型K线阈值: 必须比过去50根里最大的还要大 10%
+        threshold_climax_bar = max_body_recent * 1.1
+        
+        return threshold_extension, threshold_climax_bar
+
     def generate_order(self, stage, trend_dir, setup_type, candles, atr):
         signal_bar = candles[-1]
         
@@ -17,8 +45,9 @@ class ExecutionService:
         bar_height = signal_bar.high - signal_bar.low
         is_huge_bar = bar_height > (atr * 3.0)
 
-        # --- Stage 1: Spike ---
+        # --- Stage 1: Spike (强趋势) ---
         if "1-STRONG_TREND" in stage:
+            # A. 顺势逻辑 (原有: Stop Order 追单)
             if trend_dir == "BULL":
                 action = "PLACE_BUY_STOP"
                 entry_price = signal_bar.high + tick_buffer
@@ -30,23 +59,66 @@ class ExecutionService:
                 sl = signal_bar.high - (bar_height * 0.5) if is_huge_bar else signal_bar.high + tick_buffer
                 tp = 0
 
+            # ==========================================================
+            # B. [优化] 左侧接飞刀逻辑 (Adaptive Fade - Limit Order)
+            # ==========================================================
+            
+            # 准备数据
+            ema20_val = sum([c.close for c in candles[-20:]]) / 20
+            
+            # [关键] 获取动态阈值
+            dyn_ext_threshold, dyn_bar_threshold = self._calculate_dynamic_thresholds(candles, ema20_val)
+            
+            # 1. 乖离率判断 (使用动态阈值)
+            dist_to_ema = signal_bar.close - ema20_val
+            is_extreme_extension = abs(dist_to_ema) > dyn_ext_threshold
+            
+            # 2. 巨型 K 线判断 (使用动态阈值)
+            current_body = abs(signal_bar.close - signal_bar.open)
+            is_climax_bar = current_body > dyn_bar_threshold
+            
+            # 3. 连续加速 (保持不变)
+            is_consecutive_bear = all(c.close < c.open for c in candles[-3:])
+            is_consecutive_bull = all(c.close > c.open for c in candles[-3:])
+            
+            # --- 执行逻辑 (左侧 Limit) ---
+            # 只有当行情打破了统计学规律 (3倍标准差) 且 创出历史级大K线 时才动手
+            
+            if trend_dir == "BEAR" and is_extreme_extension and is_climax_bar and is_consecutive_bear:
+                action = "PLACE_BUY_LIMIT"
+                # 挂单位置: 既然是极度恐慌，我们挂在 K 线低点再往下 10% 实体的地方
+                limit_buffer = current_body * 0.1 
+                entry_price = signal_bar.low - limit_buffer
+                
+                sl = entry_price - (atr * 1.5) # 硬止损
+                tp = ema20_val # 回归均值
+                
+                lot = 0.01 
+                reason = f"|Fade_Bear_Dyn(Ext:{abs(dist_to_ema):.1f}>SD3,Bar:{current_body:.1f}>Max)"
+
+            elif trend_dir == "BULL" and is_extreme_extension and is_climax_bar and is_consecutive_bull:
+                action = "PLACE_SELL_LIMIT"
+                
+                limit_buffer = current_body * 0.1
+                entry_price = signal_bar.high + limit_buffer
+                
+                sl = entry_price + (atr * 1.5)
+                tp = ema20_val
+                
+                lot = 0.01
+                reason = f"|Fade_Bull_Dyn(Ext:{abs(dist_to_ema):.1f}>SD3,Bar:{current_body:.1f}>Max)"
+
         # ==========================================================
         # 楔形反转逻辑 (Wedge Reversal) - 插入在 Stage 2/3 之前
         # ==========================================================
         elif "WEDGE" in setup_type:
-            # 这是一个高优先级的反转信号
-            
             # 1. 楔形顶 (Wedge Top) -> 做空
             if setup_type == "WEDGE_TOP":
                 action = "PLACE_SELL_STOP"
-                # 入场: 跌破信号 K 线低点
                 entry_price = signal_bar.low - tick_buffer
-                # 止损: 放在信号 K 线高点上方
                 sl = signal_bar.high + tick_buffer
-                
-                # [Al Brooks 止盈] 楔形起点 (P1) 或 3R
                 risk = abs(sl - entry_price)
-                tp = entry_price - (risk * 3.0) # 3R 目标
+                tp = entry_price - (risk * 3.0) 
                 reason += "|Wedge_Top_Reversal"
 
             # 2. 楔形底 (Wedge Bottom) -> 做多
@@ -54,7 +126,6 @@ class ExecutionService:
                 action = "PLACE_BUY_STOP"
                 entry_price = signal_bar.high + tick_buffer
                 sl = signal_bar.low - tick_buffer
-                
                 risk = abs(entry_price - sl)
                 tp = entry_price + (risk * 3.0)
                 reason += "|Wedge_Bottom_Reversal"
@@ -66,7 +137,6 @@ class ExecutionService:
                 entry_price = signal_bar.high + tick_buffer
                 sl = signal_bar.low - tick_buffer
                 
-                # 磁力止盈
                 recent_high = max([c.high for c in candles[-20:]])
                 target_dist = max(atr, recent_high - entry_price) 
                 
@@ -91,12 +161,10 @@ class ExecutionService:
             # --- [内部辅助函数] 寻找最近的主要拐点 ---
             def _find_major_pivots(bars, lookback_limit=100, neighbor_strength=5):
                 if len(bars) < lookback_limit: return None, None
-                
                 major_high = -1.0
                 major_low = -1.0
                 search_pool = bars[-lookback_limit:]
                 pool_len = len(search_pool)
-                
                 # 寻找 Major High
                 for i in range(pool_len - neighbor_strength - 1, neighbor_strength, -1):
                     candidate = search_pool[i]
@@ -105,7 +173,6 @@ class ExecutionService:
                     if left_wins and right_wins:
                         major_high = candidate.high
                         break
-                
                 # 寻找 Major Low
                 for i in range(pool_len - neighbor_strength - 1, neighbor_strength, -1):
                     candidate = search_pool[i]
@@ -114,47 +181,34 @@ class ExecutionService:
                     if left_wins and right_wins:
                         major_low = candidate.low
                         break
-                        
                 return major_high, major_low
 
-            # --- [主逻辑] ---
             p_high, p_low = _find_major_pivots(candles, lookback_limit=100, neighbor_strength=5)
-            
             fallback_lookback = 50
             recent_bars_fallback = candles[-fallback_lookback:]
             
-            if p_high == -1.0: 
-                rg_high = max([c.high for c in recent_bars_fallback])
-            else:
-                rg_high = p_high
-                
-            if p_low == -1.0:
-                rg_low = min([c.low for c in recent_bars_fallback])
-            else:
-                rg_low = p_low
+            if p_high == -1.0: rg_high = max([c.high for c in recent_bars_fallback])
+            else: rg_high = p_high
+            if p_low == -1.0: rg_low = min([c.low for c in recent_bars_fallback])
+            else: rg_low = p_low
             
             rg_height = rg_high - rg_low
             if rg_height == 0: rg_height = 0.001
-            
             current_pos = (signal_bar.close - rg_low) / rg_height
             
-            # 入场必须是 "Strong Signal Bar"
             prev_bar = candles[-2]
             is_engulfing_bull = (signal_bar.close > prev_bar.high) and (signal_bar.open < prev_bar.low)
             is_strong_bull = (signal_bar.close - signal_bar.open) > (atr * 0.3) 
-            
             is_engulfing_bear = (signal_bar.close < prev_bar.low) and (signal_bar.open > prev_bar.high)
             is_strong_bear = (signal_bar.open - signal_bar.close) > (atr * 0.3)
 
             if current_pos <= 0.25: 
-                # 底部做多: 必须 吞没 OR 强阳线
                 if is_engulfing_bull or is_strong_bull: 
                     action = "PLACE_BUY_STOP"
                     entry_price = signal_bar.high + tick_buffer
                     sl = signal_bar.low - tick_buffer
                     tp = entry_price + (entry_price - sl) * 1.5
                     reason += "|Strong_Rev_Buy"
-                    
             elif current_pos >= 0.75: 
                 if is_engulfing_bear or is_strong_bear:
                     action = "PLACE_SELL_STOP"
@@ -171,7 +225,6 @@ class ExecutionService:
             recent_bars = candles[-LOOKBACK:]
             range_high = max([c.high for c in recent_bars])
             range_low = min([c.low for c in recent_bars])
-            
             mm_height = max(range_high - range_low, atr)
             target_dist = mm_height * 2.0 
 
@@ -190,11 +243,13 @@ class ExecutionService:
 
         # --- 动态手数计算 ---
         if action != "HOLD":
-            sl_dist = abs(entry_price - sl)
-            if sl_dist == 0: sl_dist = atr 
-            
-            calc_lot = config.RISK_PER_TRADE_USD / (100 * sl_dist)
-            lot = max(config.MIN_LOT, min(config.MAX_LOT, calc_lot))
-            lot = round(lot, 2)
+            if "Fade" in reason:
+                pass # lot already 0.01
+            else:
+                sl_dist = abs(entry_price - sl)
+                if sl_dist == 0: sl_dist = atr 
+                calc_lot = config.RISK_PER_TRADE_USD / (100 * sl_dist)
+                lot = max(config.MIN_LOT, min(config.MAX_LOT, calc_lot))
+                lot = round(lot, 2)
 
         return action, lot, entry_price, sl, tp, reason

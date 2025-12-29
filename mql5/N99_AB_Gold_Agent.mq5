@@ -234,6 +234,17 @@ void ProcessResponse(string json_str) {
          request.type = ORDER_TYPE_SELL_STOP;
          if(SymbolInfoDouble(g_symbol, SYMBOL_BID) <= entry_price) return;
       }
+      // [新增] 支持左侧 Limit 单
+      else if(action == "PLACE_BUY_LIMIT") {
+         request.type = ORDER_TYPE_BUY_LIMIT;
+         // Limit 单价格必须低于当前价
+         if(SymbolInfoDouble(g_symbol, SYMBOL_ASK) <= entry_price) return; 
+      }
+      else if(action == "PLACE_SELL_LIMIT") {
+         request.type = ORDER_TYPE_SELL_LIMIT;
+         // Limit 单价格必须高于当前价
+         if(SymbolInfoDouble(g_symbol, SYMBOL_BID) >= entry_price) return;
+      }
       
       request.price = NormalizeDouble(entry_price, _Digits);
       request.sl = NormalizeDouble(sl, _Digits);
