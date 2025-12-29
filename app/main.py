@@ -61,21 +61,30 @@ def analyze_market(data: MarketData):
     if not is_safe:
         return SignalResponse(action="HOLD", reason=f"RISK:{safety_reason}")
 
-    # 2. 仓位管理 & 动态减仓
+    # 2. 仓位管理 & 动态减仓 (修正版：遍历所有持仓)
     current_pos_count = len(data.current_positions)
     
     if data.current_positions:
-        pos = data.current_positions[0]
-        dist_moved = abs(pos.current_price - pos.open_price)
+        # [修正] 设定 ATR 阈值
         atr_threshold = current_atr * 1.0
         
-        if pos.volume >= 0.02 and dist_moved > atr_threshold and "PARTIAL" not in pos.comment:
-             return SignalResponse(
-                 action="CLOSE_PARTIAL", 
-                 ticket=pos.ticket, 
-                 lot=config.PARTIAL_CLOSE_LOT, 
-                 reason=f"TP_Partial_1ATR({dist_moved:.1f})"
-             )
+        # [修正] 遍历所有持仓，而不仅仅是第 0 个
+        for pos in data.current_positions:
+            dist_moved = abs(pos.current_price - pos.open_price)
+            
+            # 检查条件:
+            # 1. 手数够减 (>0.01)
+            # 2. 利润够厚 (>1 ATR)
+            # 3. 没减过仓 (Comment无PARTIAL)
+            if pos.volume >= 0.02 and dist_moved > atr_threshold and "PARTIAL" not in pos.comment:
+                 # 发现一个满足条件的，立即返回指令
+                 # 因为一次只能发一个指令，处理完这个，下一次请求会处理下一个
+                 return SignalResponse(
+                     action="CLOSE_PARTIAL", 
+                     ticket=pos.ticket, 
+                     lot=config.PARTIAL_CLOSE_LOT, 
+                     reason=f"TP_Partial_1ATR({dist_moved:.1f})"
+                 )
 
     # 最大持仓限制
     if current_pos_count >= config.MAX_POSITIONS_COUNT:
