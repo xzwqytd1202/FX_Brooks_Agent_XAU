@@ -3,14 +3,14 @@
 //|                                  Copyright 2025, N99 Project     |
 //|                                         https://www.mql5.com     |
 //+------------------------------------------------------------------+
-#property copyright "N99 AI Agent (Al Brooks Logic)"
+#property copyright "N99 AI Agent (Al Brooks Logic V8.5)"
 #property link      "https://www.mql5.com"
-#property version   "6.00"
+#property version   "8.50"
 #property strict
 
 // --- 输入参数 ---
-input string ServerUrl = "http://127.0.0.1:8002/signal"; // Python服务器地址 (端口 8002)
-input int    MagicNumber = 888888;
+input string ServerUrl = "http://127.0.0.1:8002/signal"; // Python服务器地址
+input int    MagicNumber = 999999;                       // 必须与 Python config 保持一致
 
 // --- 全局变量 ---
 string g_symbol;
@@ -19,8 +19,8 @@ datetime g_last_request_time = 0;
 // --- 结构体定义 (新闻) ---
 struct NewsStatus {
    bool has_news;
-   int impact;        // 0-3
-   int mins_to_news;  // 距离分钟
+   int impact;        
+   int mins_to_news;
    string name;
 };
 
@@ -29,14 +29,14 @@ struct NewsStatus {
 //+------------------------------------------------------------------+
 int OnInit() {
    g_symbol = _Symbol;
-   EventSetTimer(1); // 1秒检查一次
+   EventSetTimer(1); 
    
-   // 必须允许 WebRequest
    if(!TerminalInfoInteger(TERMINAL_DLLS_ALLOWED)) {
       Print("Error: DLL imports must be allowed for WebRequest");
+      return(INIT_FAILED);
    }
    
-   Print("N99 AB Agent Initialized. Target: ", ServerUrl);
+   Print("N99 AB Agent V8.5 Initialized. Target: ", ServerUrl);
    return(INIT_SUCCEEDED);
 }
 
@@ -45,15 +45,17 @@ int OnInit() {
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason) {
    EventKillTimer();
+   DeleteAllPendingOrders(); // EA 移除时清理挂单
 }
 
 //+------------------------------------------------------------------+
 //| Timer / Tick Function                                            |
 //+------------------------------------------------------------------+
 void OnTick() {
-   // 限流：每 10 秒请求一次
-   if(TimeCurrent() - g_last_request_time < 10) return;
+   // 限流：每 5 秒请求一次 (加快频率以适应 M5 的快速突破)
+   if(TimeCurrent() - g_last_request_time < 5) return;
    
+   // 仅在新 K 线产生或 K 线中间关键时刻请求
    SendRequest();
    g_last_request_time = TimeCurrent();
 }
@@ -62,70 +64,55 @@ void OnTick() {
 //| 核心逻辑: 构建数据并发包                                           |
 //+------------------------------------------------------------------+
 void SendRequest() {
-   string headers = "Content-Type: application/json\\r\\n";
+   string headers = "Content-Type: application/json\r\n";
    char post_data[];
    char result_data[];
    string result_headers;
-   
-   // 构建 JSON
+
    string json = BuildJsonPayload();
    
-   // 转换 (UTF-8)
    int len = StringToCharArray(json, post_data, 0, WHOLE_ARRAY, CP_UTF8);
-   ArrayResize(post_data, len - 1); // 移除 \\0
+   ArrayResize(post_data, len - 1); 
    
-   // 发送
-   int res = WebRequest("POST", ServerUrl, headers, 3000, post_data, result_data, result_headers);
+   // 超时时间设为 2000ms，快速响应
+   int res = WebRequest("POST", ServerUrl, headers, 2000, post_data, result_data, result_headers);
    
    if(res == 200) {
       string response = CharArrayToString(result_data);
       ProcessResponse(response);
    } else {
-      Print("Error connecting to Python: ", res, " Error: ", GetLastError());
-      // 如果 4014 错误，提示用户去 Options 勾选 WebRequest
-      if(GetLastError() == 4014) Print("Please add URL to 'Allow WebRequest' list in Tools->Options");
+      // 只有连续错误才打印，避免刷屏
+      static int err_count = 0;
+      if(res == -1) err_count++;
+      if(err_count > 5) {
+         Print("Connection Error: ", GetLastError());
+         err_count = 0;
+      }
    }
 }
 
 //+------------------------------------------------------------------+
-//| JSON 构建器 (Schema 对齐)                                         |
+//| JSON 构建器                                                       |
 //+------------------------------------------------------------------+
 string BuildJsonPayload() {
    string json = "{";
    
-   // 1. 基础信息
    MqlTick last_tick; SymbolInfoTick(g_symbol, last_tick);
-   MqlDateTime dt; TimeCurrent(dt);
+   MqlDateTime dt; TimeCurrent(dt); // 这是服务器时间
    
-   json += "\\"symbol\\":\\"" + g_symbol + "\\",";
-   json += "\\"server_time_hour\\":" + IntegerToString(dt.hour) + ",";
-   json += "\\"server_time_minute\\":" + IntegerToString(dt.min) + ",";
-   json += "\\"bid\\":" + DoubleToString(last_tick.bid, _Digits) + ",";
-   json += "\\"ask\\":" + DoubleToString(last_tick.ask, _Digits) + ",";
-   json += "\\"spread\\":" + IntegerToString((int)SymbolInfoInteger(g_symbol, SYMBOL_SPREAD)) + ",";
+   json += "\"symbol\":\"" + g_symbol + "\",";
+   json += "\"server_time_hour\":" + IntegerToString(dt.hour) + ",";
+   json += "\"bid\":" + DoubleToString(last_tick.bid, _Digits) + ",";
+   json += "\"ask\":" + DoubleToString(last_tick.ask, _Digits) + ",";
+   json += "\"spread\":" + IntegerToString((int)SymbolInfoInteger(g_symbol, SYMBOL_SPREAD)) + ",";
    
-   // 2. 账户风控信息
-   json += "\\"account_equity\\":" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2) + ",";
-   double margin_level = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
-   json += "\\"margin_level\\":" + DoubleToString(margin_level, 2) + ",";
+   json += "\"account_equity\":" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2) + ",";
+   json += "\"margin_level\":" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN_LEVEL), 2) + ",";
    
-   // 3. K 线数据 (Al Brooks 需要长历史)
-   // M5 需要 100 根用于数浪 (Leg Counting)
-   json += "\\"m5_candles\\":" + GetCandlesJson(PERIOD_M5, 100) + ",";
-   // H1 需要 50 根用于环境 (Context)
-   json += "\\"h1_candles\\":" + GetCandlesJson(PERIOD_H1, 50) + ",";
-   
-   // 4. 新闻数据
-   NewsStatus news = GetUpcomingNews();
-   json += "\\"news_info\\":{";
-   json += "\\"has_news\\":" + (news.has_news ? "true" : "false") + ",";
-   json += "\\"impact_level\\":" + IntegerToString(news.impact) + ",";
-   json += "\\"minutes_to_news\\":" + IntegerToString(news.mins_to_news) + ",";
-   json += "\\"event_name\\":\\"" + news.name + "\\"";
-   json += "},";
-   
-   // 5. 持仓数据
-   json += "\\"current_positions\\":" + GetPositionsJson();
+   // [确认] M5 发送 100 根，满足 Python Stage 3 的 50 根 ZigZag 回溯需求
+   json += "\"m5_candles\":" + GetCandlesJson(PERIOD_M5, 100) + ",";
+   json += "\"news_info\":{\"has_news\":false, \"impact_level\":0, \"minutes_to_news\":999, \"event_name\":\"None\"},"; // 简化新闻，主要靠Python端风控
+   json += "\"current_positions\":" + GetPositionsJson();
    
    json += "}";
    return json;
@@ -143,47 +130,17 @@ string GetCandlesJson(ENUM_TIMEFRAMES period, int count) {
    for(int i=0; i<copied; i++) {
       if(i > 0) json += ",";
       json += "{";
-      json += "\\"time\\":" + IntegerToString(rates[i].time) + ",";
-      json += "\\"open\\":" + DoubleToString(rates[i].open, _Digits) + ",";
-      json += "\\"high\\":" + DoubleToString(rates[i].high, _Digits) + ",";
-      json += "\\"low\\":" + DoubleToString(rates[i].low, _Digits) + ",";
-      json += "\\"close\\":" + DoubleToString(rates[i].close, _Digits) + ",";
-      json += "\\"tick_vol\\":" + IntegerToString(rates[i].tick_volume) + ",";
-      json += "\\"spread\\":" + IntegerToString(rates[i].spread);
+      json += "\"time\":" + IntegerToString(rates[i].time) + ",";
+      json += "\"open\":" + DoubleToString(rates[i].open, _Digits) + ",";
+      json += "\"high\":" + DoubleToString(rates[i].high, _Digits) + ",";
+      json += "\"low\":" + DoubleToString(rates[i].low, _Digits) + ",";
+      json += "\"close\":" + DoubleToString(rates[i].close, _Digits) + ",";
+      json += "\"tick_vol\":" + IntegerToString(rates[i].tick_volume) + ",";
+      json += "\"spread\":" + IntegerToString(rates[i].spread);
       json += "}";
    }
    json += "]";
    return json;
-}
-
-//+------------------------------------------------------------------+
-//| 辅助: 获取新闻                                                    |
-//+------------------------------------------------------------------+
-NewsStatus GetUpcomingNews() {
-   NewsStatus status;
-   status.has_news = false; status.impact = 0; status.mins_to_news = 999; status.name = "None";
-   
-   MqlCalendarValue values[];
-   datetime start = TimeCurrent();
-   datetime end = start + 3600 * 4; 
-   
-   if(CalendarValueHistory(values, start, end, NULL, "USD")) {
-      for(int i=0; i<ArraySize(values); i++) {
-         MqlCalendarEvent event;
-         if(CalendarEventById(values[i].event_id, event)) {
-            if(event.importance >= 2) { 
-               int mins = (int)((values[i].time - TimeCurrent()) / 60);
-               if(mins < status.mins_to_news) {
-                  status.has_news = true;
-                  status.impact = (int)event.importance; 
-                  status.mins_to_news = mins;
-                  status.name = "News"; 
-               }
-            }
-         }
-      }
-   }
-   return status;
 }
 
 //+------------------------------------------------------------------+
@@ -201,15 +158,15 @@ string GetPositionsJson() {
             string typeStr = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
             
             json += "{";
-            json += "\\"ticket\\":" + IntegerToString(ticket) + ",";
-            json += "\\"type\\":\\"" + typeStr + "\\",";
-            json += "\\"volume\\":" + DoubleToString(PositionGetDouble(POSITION_VOLUME), 2) + ",";  // 新增: volume字段
-            json += "\\"open_price\\":" + DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN), _Digits) + ",";
-            json += "\\"current_price\\":" + DoubleToString(PositionGetDouble(POSITION_PRICE_CURRENT), _Digits) + ",";
-            json += "\\"sl\\":" + DoubleToString(PositionGetDouble(POSITION_SL), _Digits) + ",";
-            json += "\\"tp\\":" + DoubleToString(PositionGetDouble(POSITION_TP), _Digits) + ",";
-            json += "\\"profit\\":" + DoubleToString(PositionGetDouble(POSITION_PROFIT), 2) + ",";
-            json += "\\"comment\\":\\"" + PositionGetString(POSITION_COMMENT) + "\\"";
+            json += "\"ticket\":" + IntegerToString(ticket) + ",";
+            json += "\"type\":\"" + typeStr + "\",";
+            json += "\"volume\":" + DoubleToString(PositionGetDouble(POSITION_VOLUME), 2) + ",";
+            json += "\"open_price\":" + DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN), _Digits) + ",";
+            json += "\"current_price\":" + DoubleToString(PositionGetDouble(POSITION_PRICE_CURRENT), _Digits) + ",";
+            json += "\"sl\":" + DoubleToString(PositionGetDouble(POSITION_SL), _Digits) + ",";
+            json += "\"tp\":" + DoubleToString(PositionGetDouble(POSITION_TP), _Digits) + ",";
+            json += "\"profit\":" + DoubleToString(PositionGetDouble(POSITION_PROFIT), 2) + ",";
+            json += "\"comment\":\"" + PositionGetString(POSITION_COMMENT) + "\"";
             json += "}";
             first = false;
          }
@@ -220,7 +177,7 @@ string GetPositionsJson() {
 }
 
 //+------------------------------------------------------------------+
-//| 辅助: 删除所有挂单 (Al Brooks: 一次只做一个Setup)                 |
+//| 辅助: 删除所有挂单                                                |
 //+------------------------------------------------------------------+
 void DeleteAllPendingOrders() {
    for(int i = OrdersTotal() - 1; i >= 0; i--) {
@@ -229,10 +186,8 @@ void DeleteAllPendingOrders() {
          if(OrderGetString(ORDER_SYMBOL) == g_symbol && OrderGetInteger(ORDER_MAGIC) == MagicNumber) {
             MqlTradeRequest request; ZeroMemory(request);
             MqlTradeResult result;   ZeroMemory(result);
-            
             request.action = TRADE_ACTION_REMOVE;
             request.order = ticket;
-            
             OrderSend(request, result);
          }
       }
@@ -247,9 +202,9 @@ void ProcessResponse(string json_str) {
    
    if(action == "HOLD") return;
    
-   // --- 挂单逻辑 (Stop Order) ---
+   // --- 1. 挂单逻辑 (Stop Order) ---
    if(StringFind(action, "PLACE") >= 0) {
-      // 1. 删除旧挂单 (Strict AB Logic: 每次只在当前K线有效)
+      // 先删旧单 (Strict AB Logic)
       DeleteAllPendingOrders();
       
       string reason = ExtractJsonString(json_str, "reason");
@@ -267,39 +222,36 @@ void ProcessResponse(string json_str) {
       request.symbol = g_symbol;
       request.volume = lot;
       request.magic = MagicNumber;
-      request.comment = reason; // 将阶段信息写入订单注释
+      request.comment = reason;
       
-      // 判定挂单类型和价格验证
       if(action == "PLACE_BUY_STOP") {
          request.type = ORDER_TYPE_BUY_STOP;
-         // 价格验证: Buy Stop 必须在当前Ask之上
-         if(SymbolInfoDouble(g_symbol, SYMBOL_ASK) > entry_price) {
-            Print("Buy Stop price already crossed, skipping");
-            return;
-         }
+         // 价格验证: 防止当前价已经超过挂单价导致报错
+         if(SymbolInfoDouble(g_symbol, SYMBOL_ASK) >= entry_price) return;
       } else if(action == "PLACE_SELL_STOP") {
          request.type = ORDER_TYPE_SELL_STOP;
-         // 价格验证: Sell Stop 必须在当前Bid之下
-         if(SymbolInfoDouble(g_symbol, SYMBOL_BID) < entry_price) {
-            Print("Sell Stop price already crossed, skipping");
-            return;
-         }
-      } else {
-         return; // 未知挂单类型
+         if(SymbolInfoDouble(g_symbol, SYMBOL_BID) <= entry_price) return;
       }
       
       request.price = NormalizeDouble(entry_price, _Digits);
       request.sl = NormalizeDouble(sl, _Digits);
-      request.tp = (tp > 0) ? NormalizeDouble(tp, _Digits) : 0;
+      request.tp = NormalizeDouble(tp, _Digits);
+      
+      // [优化] 过期时间：对齐到本根 K 线结束
+      // 如果当前是 10:02:30，M5 K线将在 10:05:00 结束
+      // 我们将过期时间设为 K线结束时间，而不是固定的 +300秒
+      long period_seconds = PeriodSeconds(PERIOD_M5);
+      datetime bar_start_time = iTime(g_symbol, PERIOD_M5, 0);
+      request.expiration = bar_start_time + period_seconds; 
+      
       request.type_time = ORDER_TIME_SPECIFIED;
-      request.expiration = TimeCurrent() + 300; // 5分钟过期
       
       if(!OrderSend(request, result)) {
-         Print("Pending order failed: ", GetLastError());
+         Print("Pending order failed: ", result.retcode);
       }
    }
    
-   // --- 减仓逻辑 (Close Partial) ---
+   // --- 2. 减仓逻辑 (Close Partial) ---
    if(action == "CLOSE_PARTIAL") {
       ulong ticket = (ulong)StringToInteger(ExtractJsonValue(json_str, "ticket"));
       double close_vol = StringToDouble(ExtractJsonValue(json_str, "lot"));
@@ -311,19 +263,24 @@ void ProcessResponse(string json_str) {
          request.action = TRADE_ACTION_DEAL;
          request.position = ticket;
          request.symbol = g_symbol;
-         request.volume = close_vol; // 平掉部分手数 (例如 0.01)
-         request.type = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
+         request.volume = close_vol;
+         
+         // 自动判断方向：买单 -> 卖出平仓；卖单 -> 买入平仓
+         long pos_type = PositionGetInteger(POSITION_TYPE);
+         request.type = (pos_type == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
          request.price = (request.type == ORDER_TYPE_BUY) ? SymbolInfoDouble(g_symbol, SYMBOL_ASK) : SymbolInfoDouble(g_symbol, SYMBOL_BID);
          request.magic = MagicNumber;
          request.comment = "Partial_Close";
          
          if(!OrderSend(request, result)) {
-            Print("Partial close failed: ", GetLastError());
+            Print("Partial close failed: ", result.retcode);
+         } else {
+            Print("Partial close executed: ", close_vol, " lots");
          }
       }
    }
    
-   // --- 全平逻辑 ---
+   // --- 3. 全平逻辑 (止损/风控触发) ---
    if(action == "CLOSE_POS") {
       ulong ticket = (ulong)StringToInteger(ExtractJsonValue(json_str, "ticket"));
       if(PositionSelectByTicket(ticket)) {
@@ -331,30 +288,30 @@ void ProcessResponse(string json_str) {
          MqlTradeResult result;   ZeroMemory(result);
          
          request.action = TRADE_ACTION_DEAL;
-         request.symbol = g_symbol;
          request.position = ticket;
+         request.symbol = g_symbol;
          request.volume = PositionGetDouble(POSITION_VOLUME);
          request.type = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
          request.price = (request.type == ORDER_TYPE_BUY) ? SymbolInfoDouble(g_symbol, SYMBOL_ASK) : SymbolInfoDouble(g_symbol, SYMBOL_BID);
          request.magic = MagicNumber;
          
-         if(!OrderSend(request, result)) Print("Close failed: ", GetLastError());
+         OrderSend(request, result);
       }
    }
 }
 
-// --- 简易字符串提取 ---
+// --- 简易字符串提取 (保持不变) ---
 string ExtractJsonString(string json, string key) {
-   string search = "\\"" + key + "\\":\\"";
+   string search = "\"" + key + "\":\"";
    int start = StringFind(json, search);
    if(start == -1) return "";
    start += StringLen(search);
-   int end = StringFind(json, "\\"", start);
+   int end = StringFind(json, "\"", start);
    return StringSubstr(json, start, end - start);
 }
 
 string ExtractJsonValue(string json, string key) {
-   string search = "\\"" + key + "\\":";
+   string search = "\"" + key + "\":";
    int start = StringFind(json, search);
    if(start == -1) return "0";
    start += StringLen(search);
