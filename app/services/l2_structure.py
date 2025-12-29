@@ -43,6 +43,7 @@ class StructureService:
             dist_to_ema = last['close'] - last['ema20']
             
             if trend_dir == "BULL":
+                # 场景 A: 标准突破
                 if last['high'] > prev['high']:
                     if is_bullish_signal:
                         setup = "H1"
@@ -52,8 +53,23 @@ class StructureService:
                             setup = "H2"
                     else:
                         setup = "WEAK_H1_IGNORE"
+                
+                # [新增] 场景 B: 微观双底 (Micro DB)
+                else:
+                    threshold = atr * 0.1
+                    # 1. 平底 (Matching Lows)
+                    is_matching_low = abs(last['low'] - prev['low']) < threshold
+                    # 2. 内包线 (Inside Bar) 且低点抬高
+                    is_inside_bar = (last['high'] < prev['high']) and (last['low'] > prev['low'])
+                    # 3. 必须收强阳
+                    is_strong_close = (last['close'] > last['open']) and \
+                                      ((last['close'] - last['low']) > (last['high'] - last['low']) * 0.6)
+
+                    if (is_matching_low or is_inside_bar) and is_strong_close:
+                        setup = "H1_MICRO_DB"
 
             elif trend_dir == "BEAR":
+                # 场景 A: 标准突破
                 if last['low'] < prev['low']:
                     if is_bearish_signal:
                         setup = "L1"
@@ -63,6 +79,17 @@ class StructureService:
                             setup = "L2"
                     else:
                         setup = "WEAK_L1_IGNORE"
+                
+                # [新增] 场景 B: 微观双顶 (Micro DT)
+                else:
+                    threshold = atr * 0.1
+                    is_matching_high = abs(last['high'] - prev['high']) < threshold
+                    is_inside_bar = (last['low'] > prev['low']) and (last['high'] < prev['high'])
+                    is_strong_close = (last['close'] < last['open']) and \
+                                      ((last['high'] - last['close']) > (last['high'] - last['low']) * 0.6)
+
+                    if (is_matching_high or is_inside_bar) and is_strong_close:
+                        setup = "L1_MICRO_DT"
 
         return {
             "major_trend": trend_dir, 

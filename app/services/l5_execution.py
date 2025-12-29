@@ -130,6 +130,33 @@ class ExecutionService:
                 tp = entry_price + (risk * 3.0)
                 reason += "|Wedge_Bottom_Reversal"
 
+        # ==========================================================
+        # Micro DB/DT Logic (微观双底/双顶)
+        # ==========================================================
+        elif "MICRO" in setup_type:
+             prev_bar = candles[-2]
+             
+             if setup_type == "H1_MICRO_DB":
+                 action = "PLACE_BUY_STOP"
+                 # 入场：突破两根K线的高点
+                 entry_price = max(signal_bar.high, prev_bar.high) + tick_buffer
+                 # 止损：两根K线的低点
+                 sl = min(signal_bar.low, prev_bar.low) - tick_buffer
+                 
+                 # 目标：简单的 2R 或 前高
+                 risk = entry_price - sl
+                 tp = entry_price + (risk * 2.0)
+                 reason += "|Micro_DB"
+
+             elif setup_type == "L1_MICRO_DT":
+                 action = "PLACE_SELL_STOP"
+                 entry_price = min(signal_bar.low, prev_bar.low) - tick_buffer
+                 sl = max(signal_bar.high, prev_bar.high) + tick_buffer
+                 
+                 risk = sl - entry_price
+                 tp = entry_price - (risk * 2.0)
+                 reason += "|Micro_DT"
+
         # --- Stage 2: Channel ---
         elif "2-CHANNEL" in stage:
             if trend_dir == "BULL" and setup_type in ["H1", "H2"]:
@@ -137,24 +164,39 @@ class ExecutionService:
                 entry_price = signal_bar.high + tick_buffer
                 sl = signal_bar.low - tick_buffer
                 
+                # Measured Move (AB=CD) Logic
+                # Leg 1 Height = Recent Swing High - Recent Swing Low
                 recent_high = max([c.high for c in candles[-20:]])
-                target_dist = max(atr, recent_high - entry_price) 
+                recent_low = min([c.low for c in candles[-20:]])
+                leg1_height = recent_high - recent_low
                 
+                # Target = Entry + Leg 1
+                tp_mm = entry_price + leg1_height
+                
+                # Fallback: simple 2R or magnet
                 tp_2r = entry_price + (entry_price - sl) * 2.0
-                tp_magnet = entry_price + target_dist
-                tp = min(tp_2r, tp_magnet) 
+                
+                # Use MM target if reasonable, else 2R
+                tp = max(tp_mm, tp_2r) 
+                reason += f"|Channel_Buy(MM:{leg1_height:.1f})"
 
             elif trend_dir == "BEAR" and setup_type in ["L1", "L2"]:
                 action = "PLACE_SELL_STOP"
                 entry_price = signal_bar.low - tick_buffer
                 sl = signal_bar.high + tick_buffer
                 
+                # Measured Move (AB=CD) Logic
+                recent_high = max([c.high for c in candles[-20:]])
                 recent_low = min([c.low for c in candles[-20:]])
-                target_dist = max(atr, entry_price - recent_low)
+                leg1_height = recent_high - recent_low
+                
+                # Target = Entry - Leg 1
+                tp_mm = entry_price - leg1_height
                 
                 tp_2r = entry_price - (sl - entry_price) * 2.0
-                tp_magnet = entry_price - target_dist
-                tp = max(tp_2r, tp_magnet) 
+                
+                tp = min(tp_mm, tp_2r)
+                reason += f"|Channel_Sell(MM:{leg1_height:.1f})" 
 
         # --- Stage 3: Trading Range ---
         elif "3-TRADING_RANGE" in stage:
