@@ -288,8 +288,20 @@ class ExecutionService:
             else:
                 sl_dist = abs(entry_price - sl)
                 if sl_dist == 0: sl_dist = atr 
-                calc_lot = config.RISK_PER_TRADE_USD / (100 * sl_dist)
                 lot = max(config.MIN_LOT, min(config.MAX_LOT, calc_lot))
                 lot = round(lot, 2)
+
+        # --- [新增] 价格逻辑与合规性检查 ---
+        if action in ["PLACE_BUY_STOP", "PLACE_BUY_LIMIT"]:
+            if sl >= entry_price:
+                return "HOLD", 0.0, 0.0, 0.0, 0.0, "Invalid_Buy:SL>=Entry"
+            if tp > 0 and tp <= entry_price:
+                return "HOLD", 0.0, 0.0, 0.0, 0.0, "Invalid_Buy:TP<=Entry"
+                
+        elif action in ["PLACE_SELL_STOP", "PLACE_SELL_LIMIT"]:
+            if sl <= entry_price:
+                 return "HOLD", 0.0, 0.0, 0.0, 0.0, "Invalid_Sell:SL<=Entry"
+            if tp > 0 and tp >= entry_price:
+                 return "HOLD", 0.0, 0.0, 0.0, 0.0, "Invalid_Sell:TP>=Entry"
 
         return action, lot, entry_price, sl, tp, reason

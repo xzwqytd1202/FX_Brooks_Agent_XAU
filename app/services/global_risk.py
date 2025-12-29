@@ -8,9 +8,13 @@ class GlobalRiskService:
         L0: 物理/账户硬风控 (引入 ATR 动态点差)
         """
         # 1. 账户熔断
-        drawdown = (config.INITIAL_BALANCE - data.account_equity) / config.INITIAL_BALANCE
-        if drawdown >= config.MAX_DRAWDOWN_PERCENT:
-            return False, f"CIRCUIT_BREAKER:DD_{drawdown*100:.1f}%"
+        if config.INITIAL_BALANCE > 0:
+            drawdown = (config.INITIAL_BALANCE - data.account_equity) / config.INITIAL_BALANCE
+            if drawdown >= config.MAX_DRAWDOWN_PERCENT:
+                return False, f"CIRCUIT_BREAKER:DD_{drawdown*100:.1f}%"
+        else:
+            # 异常配置保护
+            return False, "CONFIG_ERROR:INITIAL_BALANCE_ZERO"
             
         # 2. 保证金保护
         if 0 < data.margin_level < config.MIN_MARGIN_LEVEL:

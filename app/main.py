@@ -52,13 +52,14 @@ def analyze_market(data: MarketData):
     # 1. 统一数据准备
     df_m5, current_atr = prepare_market_data(data.m5_candles)
     
+    if df_m5 is None or current_atr is None:
+        return SignalResponse(action="HOLD", reason="NO_DATA_OR_ATR_FAIL")
+
     # 0. 全局风控 (传入 ATR)
+    # [修正] 确保 current_atr 有效后再调用
     is_safe, safety_reason = risk_svc.check_safety(data, current_atr)
     if not is_safe:
         return SignalResponse(action="HOLD", reason=f"RISK:{safety_reason}")
-
-    if not data.m5_candles or current_atr is None: 
-        return SignalResponse(action="HOLD", reason="NO_DATA")
 
     # 2. 仓位管理 & 动态减仓
     current_pos_count = len(data.current_positions)

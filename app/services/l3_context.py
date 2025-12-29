@@ -55,7 +55,12 @@ class ContextService:
         if h1_candles and len(h1_candles) > 20:
             df_h1 = pd.DataFrame([c.dict() for c in h1_candles])
             df_h1['ema20'] = df_h1['close'].rolling(20).mean()
-            h1_slope = df_h1['ema20'].iloc[-1] - df_h1['ema20'].iloc[-2]
+            
+            # [优化] 使用 3 根 K 线的平滑斜率，避免单根 K 线噪音
+            # Slope = (EMA[-1] - EMA[-3]) / 2
+            ema_now = df_h1['ema20'].iloc[-1]
+            ema_prev_2 = df_h1['ema20'].iloc[-3]
+            h1_slope = (ema_now - ema_prev_2) / 2
             
             # H1 斜率判断
             if h1_slope > 0: always_in_dir = "BULL"
