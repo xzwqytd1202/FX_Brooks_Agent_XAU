@@ -108,61 +108,50 @@ class ExecutionService:
                 lot = 0.01
                 reason = f"|Fade_Bull_Dyn(Ext:{abs(dist_to_ema):.1f}>SD3,Bar:{current_body:.1f}>Max)"
 
-        # ==========================================================
-        # 楔形反转逻辑 (Wedge Reversal) - 插入在 Stage 2/3 之前
-        # ==========================================================
-        elif "WEDGE" in setup_type:
-            # 1. 楔形顶 (Wedge Top) -> 做空
-            if setup_type == "WEDGE_TOP":
+        # --- 特殊反转形态 (Wedge & MTR) ---
+        # 插入在 Stage 2/3 之前
+        if "WEDGE" in setup_type or "MTR" in setup_type:
+            
+            # 1. 顶部反转 (Wedge Top OR MTR Top)
+            if setup_type in ["WEDGE_TOP", "MTR_TOP"]:
                 action = "PLACE_SELL_STOP"
                 entry_price = signal_bar.low - tick_buffer
                 sl = signal_bar.high + tick_buffer
                 risk = abs(sl - entry_price)
+                
+                # MTR/Wedge 都是大反转，目标至少 3R 或 Swing
                 tp = entry_price - (risk * 3.0) 
-                reason += "|Wedge_Top_Reversal"
+                reason += f"|Reversal_{setup_type}"
 
-            # 2. 楔形底 (Wedge Bottom) -> 做多
-            elif setup_type == "WEDGE_BOTTOM":
+            # 2. 底部反转 (Wedge Bottom OR MTR Bottom)
+            elif setup_type in ["WEDGE_BOTTOM", "MTR_BOTTOM"]:
                 action = "PLACE_BUY_STOP"
                 entry_price = signal_bar.high + tick_buffer
                 sl = signal_bar.low - tick_buffer
                 risk = abs(entry_price - sl)
+                
                 tp = entry_price + (risk * 3.0)
-                reason += "|Wedge_Bottom_Reversal"
-
-        # ==========================================================
-        # Micro DB/DT Logic (微观双底/双顶)
-        # ==========================================================
-        elif "MICRO" in setup_type:
-             prev_bar = candles[-2]
-             
-             if setup_type == "H1_MICRO_DB":
-                 action = "PLACE_BUY_STOP"
-                 # 入场：突破两根K线的高点
-                 entry_price = max(signal_bar.high, prev_bar.high) + tick_buffer
-                 # 止损：两根K线的低点
-                 sl = min(signal_bar.low, prev_bar.low) - tick_buffer
-                 
-                 # 目标：简单的 2R 或 前高
-                 risk = entry_price - sl
-                 tp = entry_price + (risk * 2.0)
-                 reason += "|Micro_DB"
-
-             elif setup_type == "L1_MICRO_DT":
-                 action = "PLACE_SELL_STOP"
-                 entry_price = min(signal_bar.low, prev_bar.low) - tick_buffer
-                 sl = max(signal_bar.high, prev_bar.high) + tick_buffer
-                 
-                 risk = sl - entry_price
-                 tp = entry_price - (risk * 2.0)
-                 reason += "|Micro_DT"
+                reason += f"|Reversal_{setup_type}"
 
         # --- Stage 2: Channel ---
         elif "2-CHANNEL" in stage:
-            if trend_dir == "BULL" and setup_type in ["H1", "H2"]:
+            # 处理标准 H1/H2
+            if trend_dir == "BULL" and setup_type in ["H1", "H2", "H1_MICRO_DB"]:
                 action = "PLACE_BUY_STOP"
-                entry_price = signal_bar.high + tick_buffer
-                sl = signal_bar.low - tick_buffer
+                
+                # [处理微观双底] 入场价稍有不同
+                if setup_type == "H1_MICRO_DB":
+                    # 入场点设为两根K线中较高的高点 (Breakout of cluster)
+                    prev_bar = candles[-2]
+                    breakout_lvl = max(signal_bar.high, prev_bar.high)
+                    entry_price = breakout_lvl + tick_buffer
+                    # 止损设为两根中较低的低点
+                    sl = min(signal_bar.low, prev_bar.low) - tick_buffer
+                    reason += "|Micro_DB"
+                else:
+                    # 标准 H1/H2
+                    entry_price = signal_bar.high + tick_buffer
+                    sl = signal_bar.low - tick_buffer
                 
                 # Measured Move (AB=CD) Logic
                 # Leg 1 Height = Recent Swing High - Recent Swing Low
@@ -172,18 +161,25 @@ class ExecutionService:
                 
                 # Target = Entry + Leg 1
                 tp_mm = entry_price + leg1_height
-                
-                # Fallback: simple 2R or magnet
                 tp_2r = entry_price + (entry_price - sl) * 2.0
                 
                 # Use MM target if reasonable, else 2R
                 tp = max(tp_mm, tp_2r) 
                 reason += f"|Channel_Buy(MM:{leg1_height:.1f})"
 
-            elif trend_dir == "BEAR" and setup_type in ["L1", "L2"]:
+            # 处理标准 L1/L2
+            elif trend_dir == "BEAR" and setup_type in ["L1", "L2", "L1_MICRO_DT"]:
                 action = "PLACE_SELL_STOP"
-                entry_price = signal_bar.low - tick_buffer
-                sl = signal_bar.high + tick_buffer
+                
+                if setup_type == "L1_MICRO_DT":
+                    prev_bar = candles[-2]
+                    breakout_lvl = min(signal_bar.low, prev_bar.low)
+                    entry_price = breakout_lvl - tick_buffer
+                    sl = max(signal_bar.high, prev_bar.high) + tick_buffer
+                    reason += "|Micro_DT"
+                else:
+                    entry_price = signal_bar.low - tick_buffer
+                    sl = signal_bar.high + tick_buffer
                 
                 # Measured Move (AB=CD) Logic
                 recent_high = max([c.high for c in candles[-20:]])
@@ -192,7 +188,6 @@ class ExecutionService:
                 
                 # Target = Entry - Leg 1
                 tp_mm = entry_price - leg1_height
-                
                 tp_2r = entry_price - (sl - entry_price) * 2.0
                 
                 tp = min(tp_mm, tp_2r)

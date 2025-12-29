@@ -35,31 +35,36 @@ class StructureService:
         # [原有] 顺势回调逻辑 (H1/H2) - 作为备选
         # =========================================================
         if setup == "NONE":
-            # 强信号定义
+            # 定义微观容差 (例如 10% ATR)
+            threshold = atr * 0.1 
+            
+            # 定义强信号棒
             is_bullish_signal = (last['close'] > last['open']) or (last['close'] > prev['high'])
             is_bearish_signal = (last['close'] < last['open']) or (last['close'] < prev['low'])
             
-            # 磁力检查
+            # 磁力距离 (离 EMA 太远不做第一次回调)
             dist_to_ema = last['close'] - last['ema20']
             
+            # --- 多头逻辑 ---
             if trend_dir == "BULL":
-                # 场景 A: 标准突破
+                # A. 标准突破 (破前高)
                 if last['high'] > prev['high']:
                     if is_bullish_signal:
                         setup = "H1"
+                        # 过滤: 离均线太远，H1 容易失败
                         if dist_to_ema > (atr * config.AB_MAGNET_DISTANCE_ATR):
                             setup = "WEAK_H1_TOO_FAR"
+                        # 深度回调判定 (H2)
                         if last['low'] < (last['ema20'] - atr * 0.2):
                             setup = "H2"
                     else:
                         setup = "WEAK_H1_IGNORE"
-                
-                # [新增] 场景 B: 微观双底 (Micro DB)
+
+                # B. [补全] 微观双底 (Micro DB) - 没破前高但结构扎实
                 else:
-                    threshold = atr * 0.1
-                    # 1. 平底 (Matching Lows)
+                    # 1. Matching Lows (平底)
                     is_matching_low = abs(last['low'] - prev['low']) < threshold
-                    # 2. 内包线 (Inside Bar) 且低点抬高
+                    # 2. Inside Bar (内包线且低点抬高)
                     is_inside_bar = (last['high'] < prev['high']) and (last['low'] > prev['low'])
                     # 3. 必须收强阳
                     is_strong_close = (last['close'] > last['open']) and \
@@ -68,8 +73,9 @@ class StructureService:
                     if (is_matching_low or is_inside_bar) and is_strong_close:
                         setup = "H1_MICRO_DB"
 
+            # --- 空头逻辑 ---
             elif trend_dir == "BEAR":
-                # 场景 A: 标准突破
+                # A. 标准突破 (破前低)
                 if last['low'] < prev['low']:
                     if is_bearish_signal:
                         setup = "L1"
@@ -79,10 +85,9 @@ class StructureService:
                             setup = "L2"
                     else:
                         setup = "WEAK_L1_IGNORE"
-                
-                # [新增] 场景 B: 微观双顶 (Micro DT)
+
+                # B. [补全] 微观双顶 (Micro DT)
                 else:
-                    threshold = atr * 0.1
                     is_matching_high = abs(last['high'] - prev['high']) < threshold
                     is_inside_bar = (last['low'] > prev['low']) and (last['high'] < prev['high'])
                     is_strong_close = (last['close'] < last['open']) and \
@@ -91,12 +96,60 @@ class StructureService:
                     if (is_matching_high or is_inside_bar) and is_strong_close:
                         setup = "L1_MICRO_DT"
 
+        # =========================================================
+        # 3. [新增] MTR (主要趋势反转) 升级检测
+        # =========================================================
+        # 逻辑: 如果当前是 H2/L2，且之前发生过"趋势线突破"(EMA Break)，则升级为 MTR
+        if setup in ["H2", "L2"]:
+            is_mtr = self._check_mtr_signal(df, trend_dir, atr, setup)
+            if is_mtr:
+                if setup == "H2": setup = "MTR_BOTTOM" # 底部反转
+                elif setup == "L2": setup = "MTR_TOP"  # 顶部反转
+
         return {
             "major_trend": trend_dir, 
             "setup": setup, 
-            # 如果是 Wedge，把起始点传出去作为止盈参考
             "wedge_start": wedge_pivots[2] if setup.startswith("WEDGE") else 0.0 
         }
+
+    # ------------------------------------------------------------------
+    # 辅助: 检测 MTR 前置条件 (趋势线突破)
+    # ------------------------------------------------------------------
+    def _check_mtr_signal(self, df, trend_dir, atr, current_setup):
+        """
+        MTR = Break of Trend Line (EMA) + Test of Extreme (H2/L2)
+        这里负责检测 'Break' 部分
+        """
+        # 回溯 30 根 K 线寻找"强力突破"
+        lookback = 30
+        if len(df) < lookback: return False
+        
+        # 不看最近 5 根(因为那是 Test 过程)，看之前的
+        history = df.iloc[-lookback:-5]
+        has_break = False
+        
+        # 寻找 Break: 实体大(>0.6 ATR) 且 收盘穿越 EMA
+        if trend_dir == "BEAR" and current_setup == "H2":
+            # 这是一个潜在底部反转 (Bottom MTR)
+            # 寻找之前是否有: 强阳线 + 收盘在 EMA 上方
+            for i in range(len(history)):
+                bar = history.iloc[i]
+                is_strong = (bar['close'] - bar['open']) > (atr * 0.6)
+                break_ema = bar['close'] > bar['ema20']
+                if is_strong and break_ema:
+                    has_break = True; break
+                    
+        elif trend_dir == "BULL" and current_setup == "L2":
+            # 这是一个潜在顶部反转 (Top MTR)
+            # 寻找之前是否有: 强阴线 + 收盘在 EMA 下方
+            for i in range(len(history)):
+                bar = history.iloc[i]
+                is_strong = (bar['open'] - bar['close']) > (atr * 0.6)
+                break_ema = bar['close'] < bar['ema20']
+                if is_strong and break_ema:
+                    has_break = True; break
+                    
+        return has_break
 
     # ------------------------------------------------------------------
     # 核心算法: 基于 Pivot 的模糊楔形评分
