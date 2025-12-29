@@ -30,20 +30,46 @@ class ExecutionService:
                 sl = signal_bar.high - (bar_height * 0.5) if is_huge_bar else signal_bar.high + tick_buffer
                 tp = 0
 
-        # --- Stage 2: Channel (引入磁力止盈) ---
+        # ==========================================================
+        # 楔形反转逻辑 (Wedge Reversal) - 插入在 Stage 2/3 之前
+        # ==========================================================
+        elif "WEDGE" in setup_type:
+            # 这是一个高优先级的反转信号
+            
+            # 1. 楔形顶 (Wedge Top) -> 做空
+            if setup_type == "WEDGE_TOP":
+                action = "PLACE_SELL_STOP"
+                # 入场: 跌破信号 K 线低点
+                entry_price = signal_bar.low - tick_buffer
+                # 止损: 放在信号 K 线高点上方
+                sl = signal_bar.high + tick_buffer
+                
+                # [Al Brooks 止盈] 楔形起点 (P1) 或 3R
+                risk = abs(sl - entry_price)
+                tp = entry_price - (risk * 3.0) # 3R 目标
+                reason += "|Wedge_Top_Reversal"
+
+            # 2. 楔形底 (Wedge Bottom) -> 做多
+            elif setup_type == "WEDGE_BOTTOM":
+                action = "PLACE_BUY_STOP"
+                entry_price = signal_bar.high + tick_buffer
+                sl = signal_bar.low - tick_buffer
+                
+                risk = abs(entry_price - sl)
+                tp = entry_price + (risk * 3.0)
+                reason += "|Wedge_Bottom_Reversal"
+
+        # --- Stage 2: Channel ---
         elif "2-CHANNEL" in stage:
             if trend_dir == "BULL" and setup_type in ["H1", "H2"]:
                 action = "PLACE_BUY_STOP"
                 entry_price = signal_bar.high + tick_buffer
                 sl = signal_bar.low - tick_buffer
                 
-                # [修改] 磁力止盈 (Trend Extreme Magnet)
-                # 目标是测试前高 (Trend High)。如果不清楚前高，默认 2R。
-                # 这里简单取最近 20 根的最高价作为 Magnet
+                # 磁力止盈
                 recent_high = max([c.high for c in candles[-20:]])
                 target_dist = max(atr, recent_high - entry_price) 
                 
-                # 取 2R 和 前高阻力位 的较小值 (保守策略)
                 tp_2r = entry_price + (entry_price - sl) * 2.0
                 tp_magnet = entry_price + target_dist
                 tp = min(tp_2r, tp_magnet) 
@@ -60,7 +86,7 @@ class ExecutionService:
                 tp_magnet = entry_price - target_dist
                 tp = max(tp_2r, tp_magnet) 
 
-        # --- Stage 3: Trading Range (强反转入场 + 分形 Pivot) ---
+        # --- Stage 3: Trading Range ---
         elif "3-TRADING_RANGE" in stage:
             # --- [内部辅助函数] 寻找最近的主要拐点 ---
             def _find_major_pivots(bars, lookback_limit=100, neighbor_strength=5):
@@ -112,7 +138,7 @@ class ExecutionService:
             
             current_pos = (signal_bar.close - rg_low) / rg_height
             
-            # [关键修改] 入场必须是 "Strong Signal Bar"
+            # 入场必须是 "Strong Signal Bar"
             prev_bar = candles[-2]
             is_engulfing_bull = (signal_bar.close > prev_bar.high) and (signal_bar.open < prev_bar.low)
             is_strong_bull = (signal_bar.close - signal_bar.open) > (atr * 0.3) 
