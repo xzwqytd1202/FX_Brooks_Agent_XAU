@@ -74,8 +74,8 @@ void SendRequest() {
    int len = StringToCharArray(json, post_data, 0, WHOLE_ARRAY, CP_UTF8);
    ArrayResize(post_data, len - 1); 
    
-   // 超时时间设为 2000ms，快速响应
-   int res = WebRequest("POST", ServerUrl, headers, 2000, post_data, result_data, result_headers);
+   // [优化] 超时时间设为 5000ms，确保复杂逻辑（Wedge/MTR/ZigZag检测）有足够时间
+   int res = WebRequest("POST", ServerUrl, headers, 5000, post_data, result_data, result_headers);
    
    if(res == 200) {
       string response = CharArrayToString(result_data);
@@ -237,7 +237,7 @@ void ProcessResponse(string json_str) {
       // [新增] 支持左侧 Limit 单
       else if(action == "PLACE_BUY_LIMIT") {
          request.type = ORDER_TYPE_BUY_LIMIT;
-         // Limit 单价格必须低于当前价
+         // BUY LIMIT: 挂单价必须低于当前价才有效，如果当前价已低于挂单价则拒绝
          if(SymbolInfoDouble(g_symbol, SYMBOL_ASK) <= entry_price) return; 
       }
       else if(action == "PLACE_SELL_LIMIT") {

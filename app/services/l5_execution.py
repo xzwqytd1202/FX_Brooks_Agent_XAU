@@ -288,6 +288,7 @@ class ExecutionService:
             else:
                 sl_dist = abs(entry_price - sl)
                 if sl_dist == 0: sl_dist = atr 
+                calc_lot = config.RISK_PER_TRADE_USD / (100 * sl_dist)
                 lot = max(config.MIN_LOT, min(config.MAX_LOT, calc_lot))
                 lot = round(lot, 2)
 
