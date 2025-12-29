@@ -19,7 +19,6 @@ l3_svc = ContextService()
 l5_svc = ExecutionService()
 
 def calculate_atr(candles, period=14):
-    # [7] ATR 数据长度保护
     if not candles or len(candles) < config.MIN_HISTORY_FOR_ATR:
         return None 
     
@@ -33,29 +32,23 @@ def calculate_atr(candles, period=14):
 
 @app.post("/signal", response_model=SignalResponse)
 def analyze_market(data: MarketData):
-    # 0. 全局风控
-    is_safe, safety_reason = risk_svc.check_safety(data)
+    # 1. 计算 ATR (必须放在最前面，因为风控需要它)
+    current_atr = calculate_atr(data.m5_candles)
+    
+    # 0. 全局风控 (传入 ATR)
+    is_safe, safety_reason = risk_svc.check_safety(data, current_atr)
     if not is_safe:
         return SignalResponse(action="HOLD", reason=f"RISK:{safety_reason}")
 
-    # 1. 数据准备 & ATR计算
-    if not data.m5_candles: 
+    if not data.m5_candles or current_atr is None: 
         return SignalResponse(action="HOLD", reason="NO_DATA")
-    
-    current_atr = calculate_atr(data.m5_candles)
-    if current_atr is None: # [7] 数据不足
-        return SignalResponse(action="HOLD", reason="WAIT_FOR_DATA")
 
-    # 2. 仓位管理 & [9] 动态减仓
+    # 2. 仓位管理 & 动态减仓
     current_pos_count = len(data.current_positions)
     
     if data.current_positions:
         pos = data.current_positions[0]
-        # 计算价格位移
         dist_moved = abs(pos.current_price - pos.open_price)
-        
-        # [9] 减仓条件: 跑赢 1 倍 ATR
-        # XAUUSD 4500, ATR~10 => 跑10美金才减仓
         atr_threshold = current_atr * 1.0
         
         if pos.volume >= 0.02 and dist_moved > atr_threshold and "PARTIAL" not in pos.comment:
@@ -66,18 +59,20 @@ def analyze_market(data: MarketData):
                  reason=f"TP_Partial_1ATR({dist_moved:.1f})"
              )
 
-    # [3] 最大持仓限制
+    # 最大持仓限制
     if current_pos_count >= config.MAX_POSITIONS_COUNT:
          return SignalResponse(action="HOLD", reason="Max_Pos_Reached")
     
     # 3. 分析流程
     m5_bars = data.m5_candles
     
-    stage, trend_dir = l3_svc.identify_stage(m5_bars, current_atr)
+    # [修改] L3 传入 h1_candles 以判断 Always In
+    stage, trend_dir = l3_svc.identify_stage(m5_bars, data.h1_candles, current_atr)
+    
     structure = l2_svc.update_counter(m5_bars, trend_dir, current_atr)
     
     # Setup 过滤
-    if "IGNORE" in structure.get('setup', ''):
+    if "IGNORE" in structure.get('setup', '') or "TOO_FAR" in structure.get('setup', ''):
         return SignalResponse(action="HOLD", reason=f"Weak_Setup_{structure['setup']}")
     
     action, lot, entry, sl, tp, reason = l5_svc.generate_order(

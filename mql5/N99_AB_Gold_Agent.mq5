@@ -102,6 +102,7 @@ string BuildJsonPayload() {
    
    json += "\"symbol\":\"" + g_symbol + "\",";
    json += "\"server_time_hour\":" + IntegerToString(dt.hour) + ",";
+   json += "\"server_time_minute\":" + IntegerToString(dt.min) + ",";
    json += "\"bid\":" + DoubleToString(last_tick.bid, _Digits) + ",";
    json += "\"ask\":" + DoubleToString(last_tick.ask, _Digits) + ",";
    json += "\"spread\":" + IntegerToString((int)SymbolInfoInteger(g_symbol, SYMBOL_SPREAD)) + ",";
@@ -109,9 +110,10 @@ string BuildJsonPayload() {
    json += "\"account_equity\":" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2) + ",";
    json += "\"margin_level\":" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN_LEVEL), 2) + ",";
    
-   // [确认] M5 发送 100 根，满足 Python Stage 3 的 50 根 ZigZag 回溯需求
+   // [V9.0] M5 发送 110 根，H1 发送 50 根 (用于 Always In 判断)
    json += "\"m5_candles\":" + GetCandlesJson(PERIOD_M5, 110) + ",";
-   json += "\"news_info\":{\"has_news\":false, \"impact_level\":0, \"minutes_to_news\":999, \"event_name\":\"None\"},"; // 简化新闻，主要靠Python端风控
+   json += "\"h1_candles\":" + GetCandlesJson(PERIOD_H1, 50) + ",";
+   json += "\"news_info\":{\"has_news\":false, \"impact_level\":0, \"minutes_to_news\":999, \"event_name\":\"None\"},";
    json += "\"current_positions\":" + GetPositionsJson();
    
    json += "}";
