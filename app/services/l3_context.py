@@ -54,7 +54,7 @@ class ContextService:
         always_in_dir = "NEUTRAL"
         if h1_candles and len(h1_candles) > 20:
             df_h1 = pd.DataFrame([c.dict() for c in h1_candles])
-            df_h1['ema20'] = df_h1['close'].rolling(20).mean()
+            df_h1['ema20'] = df_h1['close'].ewm(span=20, adjust=False).mean()
             
             # [优化] 使用 3 根 K 线的平滑斜率，避免单根 K 线噪音
             # Slope = (EMA[-1] - EMA[-3]) / 2

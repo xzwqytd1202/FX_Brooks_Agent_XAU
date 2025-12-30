@@ -41,7 +41,7 @@ def prepare_market_data(candles, period=14):
     current_atr = df['tr'].rolling(period).mean().iloc[-1]
     
     # 2. 计算 EMA20
-    df['ema20'] = df['close'].rolling(20).mean()
+    df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     
     if pd.isna(current_atr): current_atr = 5.0
     
