@@ -86,6 +86,64 @@ def analyze_market(data: MarketData):
                      reason=f"TP_Partial_1ATR({dist_moved:.1f})"
                  )
 
+    # [新增] 移动止损逻辑 (Trailing Stop)
+    if data.current_positions:
+        atr_val = current_atr
+        for pos in data.current_positions:
+            # 计算当前利润距离 (点数)
+            if pos.type == "BUY":
+                dist_profit = pos.current_price - pos.open_price
+                current_sl = pos.sl
+                
+                # 策略 A: 利润 > 1.5 ATR -> 移至保本 (入场价 + 0.1 ATR 覆盖手续费)
+                if dist_profit > (atr_val * 1.5):
+                    new_sl = pos.open_price + (atr_val * 0.1)
+                    # 只有当新止损比旧止损更高时才修改 (只上不以)
+                    if new_sl > current_sl + 0.05: # 0.05是防止微小频繁修改
+                         return SignalResponse(
+                             action="MODIFY_SL",
+                             ticket=pos.ticket,
+                             sl=new_sl,
+                             reason=f"Breakeven_1.5ATR"
+                         )
+                
+                # 策略 B: 利润 > 4.0 ATR -> 紧跟趋势 (现价 - 2.0 ATR)
+                # 保护类似截图中 30-40 美金的大利润
+                if dist_profit > (atr_val * 4.0):
+                    new_sl = pos.current_price - (atr_val * 2.0)
+                    if new_sl > current_sl + 0.05:
+                         return SignalResponse(
+                             action="MODIFY_SL",
+                             ticket=pos.ticket,
+                             sl=new_sl,
+                             reason=f"Trail_2ATR"
+                         )
+
+            # 空头同理 (逻辑反过来)
+            elif pos.type == "SELL":
+                dist_profit = pos.open_price - pos.current_price
+                current_sl = pos.sl
+                
+                if dist_profit > (atr_val * 1.5):
+                    new_sl = pos.open_price - (atr_val * 0.1)
+                    if new_sl < current_sl - 0.05:
+                         return SignalResponse(
+                             action="MODIFY_SL",
+                             ticket=pos.ticket,
+                             sl=new_sl,
+                             reason=f"Breakeven_1.5ATR"
+                         )
+                         
+                if dist_profit > (atr_val * 4.0):
+                    new_sl = pos.current_price + (atr_val * 2.0)
+                    if new_sl < current_sl - 0.05:
+                         return SignalResponse(
+                             action="MODIFY_SL",
+                             ticket=pos.ticket,
+                             sl=new_sl,
+                             reason=f"Trail_2ATR"
+                         )
+
     # 最大持仓限制
     if current_pos_count >= config.MAX_POSITIONS_COUNT:
          return SignalResponse(action="HOLD", reason="Max_Pos_Reached")

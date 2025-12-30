@@ -309,6 +309,29 @@ void ProcessResponse(string json_str) {
          OrderSend(request, result);
       }
    }
+   // --- 4. 修改止损逻辑 (Trailing Stop / Breakeven) ---
+   if(action == "MODIFY_SL") {
+      ulong ticket = (ulong)StringToInteger(ExtractJsonValue(json_str, "ticket"));
+      double new_sl = StringToDouble(ExtractJsonValue(json_str, "sl"));
+      
+      if(PositionSelectByTicket(ticket)) {
+         MqlTradeRequest request; ZeroMemory(request);
+         MqlTradeResult result;   ZeroMemory(result);
+         
+         request.action = TRADE_ACTION_SLTP; // 修改止损/止盈
+         request.position = ticket;
+         request.symbol = g_symbol;
+         request.sl = NormalizeDouble(new_sl, _Digits);
+         request.tp = PositionGetDouble(POSITION_TP); // 保持原 TP 不变
+         request.magic = MagicNumber;
+         
+         if(!OrderSend(request, result)) {
+            Print("Modify SL failed: ", result.retcode);
+         } else {
+            Print("SL Updated for Ticket ", ticket, " -> ", new_sl);
+         }
+      }
+   }
 }
 
 // --- 简易字符串提取 (保持不变) ---
