@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  ab_gold_agent:
+    build: .
+    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+    # 【新增】强制策略：绝不尝试去远程拉取镜像
+    # 这会告诉 Docker："只用本地有的，别联网检查"
+    pull_policy: never
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+    
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./app:/app/app
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
