@@ -1,0 +1,25 @@
+# 1. 使用你本地成功的那个镜像 ID 作为底座
+FROM 05c9a564ed11
+
+# 2. 设置工作目录
+WORKDIR /app
+
+# 3. 【关键步骤】清空旧镜像里原本存在的代码，防止“僵尸文件”干扰
+# 注意：这不会删除安装好的 Python 包，只会删除 /app 下的代码文件
+RUN rm -rf /app/*
+
+# 4. 复制依赖文件
+COPY requirements.txt .
+
+# 5. 安装依赖 (加上阿里云镜像源，防止 pip 也报错)
+# --no-cache-dir 减小体积
+# --trusted-host 解决 SSL 报错
+RUN pip install --no-cache-dir -r requirements.txt \
+    -i https://mirrors.aliyun.com/pypi/simple/ \
+    --trusted-host mirrors.aliyun.com
+
+# 6. 复制新代码
+COPY app ./app
+
+# 7. 启动命令
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8002"]
