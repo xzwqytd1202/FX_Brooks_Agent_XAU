@@ -122,7 +122,7 @@ string BuildJsonPayload() {
 //+------------------------------------------------------------------+
 string GetCandlesJson(ENUM_TIMEFRAMES period, int count) {
    MqlRates rates[];
-   ArraySetAsSeries(rates, true);
+   ArraySetAsSeries(rates, false);
    int copied = CopyRates(g_symbol, period, 0, count, rates);
    
    string json = "[";
