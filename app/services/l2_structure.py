@@ -177,37 +177,66 @@ class StructureService:
     # 核心算法: 基于 Pivot 的模糊楔形评分
     # ------------------------------------------------------------------
     def _detect_wedge_fuzzy(self, df, atr):
-        """
-        返回: (Score, Type, Pivots_List)
-        Type: "BEAR_WEDGE" (Top) / "BULL_WEDGE" (Bottom)
-        Pivots: [P3, P2, P1] (价格)
-        """
-        # 1. 寻找最近的 Pivot (分形高低点)
-        # 窗口大小 5: 左右各 5 根 K 线都比它低/高 (Major Pivot)
-        window = 5
-        pivots_high = [] # 存 (index, price)
+        # 定义辅助函数：判断是否为 Pivot
+        # 核心逻辑：左侧必须严格(5根)，右侧根据 K 线形态动态决定(1或2根)
+        def is_pivot(idx, type='HIGH'):
+            if idx < 5 or idx >= len(df) - 1: return False
+            
+            # 1. 左侧检查 (严格，确保是主要高/低点)
+            window_left = 5
+            current_val = df['high'].iloc[idx] if type == 'HIGH' else df['low'].iloc[idx]
+            
+            for k in range(1, window_left + 1):
+                if idx - k < 0: break
+                compare_val = df['high'].iloc[idx-k] if type == 'HIGH' else df['low'].iloc[idx-k]
+                if type == 'HIGH' and compare_val > current_val: return False
+                if type == 'LOW' and compare_val < current_val: return False
+            
+            # 2. 右侧检查 (动态宽松)
+            # 默认只需 1 根确认 (最快反应)
+            # 但如果这根 Pivot K线本身很弱，我们可能需要第 2 根确认
+            window_right = 1 
+            
+            # 获取这根潜在 Pivot 的形态
+            bar = df.iloc[idx]
+            body = abs(bar['close'] - bar['open'])
+            upper_wick = bar['high'] - max(bar['open'], bar['close'])
+            lower_wick = min(bar['open'], bar['close']) - bar['low']
+            
+            # 判断逻辑:
+            if type == 'HIGH':
+                # 如果是顶部 Pivot，看是否是强空头K线 (阴线且收盘在低位，或长上影)
+                is_strong_reversal = (bar['close'] < bar['open']) or (upper_wick > body)
+                # 如果不强，强制要求右边 2 根都比它低，防止误报
+                if not is_strong_reversal: window_right = 2
+                
+                # 执行右侧检查
+                for k in range(1, window_right + 1):
+                    if idx + k >= len(df): return False # 数据还没出来，不能确认
+                    if df['high'].iloc[idx+k] > current_val: return False
+
+            elif type == 'LOW':
+                # 如果是底部 Pivot，看是否是强多头K线
+                is_strong_reversal = (bar['close'] > bar['open']) or (lower_wick > body)
+                if not is_strong_reversal: window_right = 2
+                
+                for k in range(1, window_right + 1):
+                    if idx + k >= len(df): return False
+                    if df['low'].iloc[idx+k] < current_val: return False
+                    
+            return True
+
+        # --- 使用新逻辑寻找 Pivots ---
+        pivots_high = []
         pivots_low = []
         
-        # 倒序遍历，找最近的 3 个
+        # 倒序遍历 (找最近的)
+        # 范围修正: len(df)-2 是因为至少要留 1 根做右侧确认
         for i in range(len(df)-2, 20, -1):
-            # Check High
-            if i+window < len(df):
-                current_high = df['high'].iloc[i]
-                is_pivot_h = True
-                for k in range(1, window+1):
-                    if df['high'].iloc[i-k] > current_high or df['high'].iloc[i+k] > current_high:
-                        is_pivot_h = False; break
-                if is_pivot_h: pivots_high.append((i, current_high))
+            if is_pivot(i, 'HIGH'): pivots_high.append((i, df['high'].iloc[i]))
+            if is_pivot(i, 'LOW'): pivots_low.append((i, df['low'].iloc[i]))
             
-            # Check Low
-            if i+window < len(df):
-                current_low = df['low'].iloc[i]
-                is_pivot_l = True
-                for k in range(1, window+1):
-                    if df['low'].iloc[i-k] < current_low or df['low'].iloc[i+k] < current_low:
-                        is_pivot_l = False; break
-                if is_pivot_l: pivots_low.append((i, current_low))
-                
+            # 找到 3 个就停
             if len(pivots_high) >= 3 and len(pivots_low) >= 3: break
             
         # ----------------------------------------------------
