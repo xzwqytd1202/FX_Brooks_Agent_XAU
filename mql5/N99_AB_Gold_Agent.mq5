@@ -29,12 +29,10 @@ struct NewsStatus {
 //+------------------------------------------------------------------+
 int OnInit() {
    g_symbol = _Symbol;
-   EventSetTimer(1); 
    
-   if(!TerminalInfoInteger(TERMINAL_DLLS_ALLOWED)) {
-      Print("Error: DLL imports must be allowed for WebRequest");
-      return(INIT_FAILED);
-   }
+   // [修正] WebRequest 不需要 DLL 权限，只需在 MT5 设置中配置 URL 白名单
+   // 删除 DLL 检查以避免 EA 图标消失问题
+   // 删除 EventSetTimer，逻辑完全由 OnTick 驱动
    
    Print("N99 AB Agent V8.5 Initialized. Target: ", ServerUrl);
    return(INIT_SUCCEEDED);
@@ -44,7 +42,6 @@ int OnInit() {
 //| Deinitialization                                                 |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason) {
-   EventKillTimer();
    DeleteAllPendingOrders(); // EA 移除时清理挂单
 }
 
@@ -283,7 +280,9 @@ void ProcessResponse(string json_str) {
          request.type = (pos_type == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
          request.price = (request.type == ORDER_TYPE_BUY) ? SymbolInfoDouble(g_symbol, SYMBOL_ASK) : SymbolInfoDouble(g_symbol, SYMBOL_BID);
          request.magic = MagicNumber;
-         request.comment = "Partial_Close";
+         
+         // [修正] 改为全大写，与 Python 端的 "PARTIAL" 匹配，避免重复减仓
+         request.comment = "PARTIAL_CLOSE";
          
          if(!OrderSend(request, result)) {
             Print("Partial close failed: ", result.retcode);
