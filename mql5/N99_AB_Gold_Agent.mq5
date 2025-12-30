@@ -247,12 +247,11 @@ void ProcessResponse(string json_str) {
       request.sl = NormalizeDouble(sl, _Digits);
       request.tp = NormalizeDouble(tp, _Digits);
       
-      // [优化] 过期时间：对齐到本根 K 线结束
-      // 如果当前是 10:02:30，M5 K线将在 10:05:00 结束
-      // 我们将过期时间设为 K线结束时间，而不是固定的 +300秒
-      long period_seconds = PeriodSeconds(PERIOD_M5);
-      datetime bar_start_time = iTime(g_symbol, PERIOD_M5, 0);
-      request.expiration = bar_start_time + period_seconds; 
+      // [修正] 过期时间：当前时间 + 10分钟 (600秒)
+      // 修复 "Invalid expiration" 错误
+      // 原因：K线结束时间可能太近或已过期，导致挂单失败
+      // 方案：使用服务器当前时间 + 固定时长，确保过期时间在未来且足够长
+      request.expiration = TimeCurrent() + 600;  // 10分钟有效期
       
       request.type_time = ORDER_TIME_SPECIFIED;
       
