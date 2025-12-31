@@ -31,18 +31,30 @@ class ContextService:
         recent_low = df['low'].tail(10).min()
         is_compressed = (recent_high - recent_low) < (current_atr * config.COMPRESSION_ATR)
         
-        # [新增] Barbwire (铁丝网) 检测
-        # 特征: 过去 5 根 K 线里，至少 3 根是十字星 (实体 < 0.3 ATR) 且 重叠严重
-        recent_5 = df.tail(5)
-        doji_count = 0
-        for _, row in recent_5.iterrows():
-            body = abs(row['close'] - row['open'])
-            if body < (current_atr * 0.3):
-                doji_count += 1
-        
+        # ---------------------------------------------------------
+        # [新增 1] 重叠度计算 (Choppiness Index) - 震荡的DNA
+        # ---------------------------------------------------------
+        overlap_count = 0
+        chop_lookback = 10
+        bars_tail = df.tail(chop_lookback)
+        for i in range(1, len(bars_tail)):
+            curr = bars_tail.iloc[i]
+            prev = bars_tail.iloc[i-1]
+            # 计算垂直重叠部分: min(Highs) > max(Lows)
+            overlap_h = min(curr['high'], prev['high'])
+            overlap_l = max(curr['low'], prev['low'])
+            
+            # 如果重叠部分存在，且幅度较大 (例如 > 0，这里只要重叠就算)
+            if overlap_h > overlap_l:
+                overlap_count += 1
+                
+        # 判定标准: 10根里有6根以上重叠，或者穿越均线次数过多
+        is_choppy = overlap_count >= 6 or crossings >= 4
+
+        # [原有] Barbwire 检测 (增强版: 结合 Choppy)
         is_barbwire = False
-        if doji_count >= 3 and is_compressed:
-            is_barbwire = True
+        if is_choppy and is_compressed:
+             is_barbwire = True
         
         # 强趋势因子
         last_3 = df.tail(3)
@@ -62,14 +74,19 @@ class ContextService:
             ema_prev_2 = df_h1['ema20'].iloc[-3]
             h1_slope = (ema_now - ema_prev_2) / 2
             
-            # H1 斜率判断
-            if h1_slope > 0: always_in_dir = "BULL"
-            elif h1_slope < 0: always_in_dir = "BEAR"
+            # [关键修正] 引入阈值 (0.2 ATR)，解决"永远不为0"的问题
+            # 这里简单用 M5 的 ATR 做参照，更严谨可用 H1 ATR
+            h1_threshold = current_atr * 0.2
+            
+            if h1_slope > h1_threshold: always_in_dir = "BULL"
+            elif h1_slope < -h1_threshold: always_in_dir = "BEAR"
+            else: always_in_dir = "NEUTRAL" # 只有这样，Stage 3 才有机会触发
 
         # --- 3. 综合阶段判定 ---
         
-        # Stage 1: Spike (M5 自己很强) - 最高优先级
-        if abs(norm_slope) > config.SLOPE_SPIKE_ATR and strong_momentum:
+        # Stage 1: Spike (必须同时满足不混乱)
+        # 如果虽然斜率大，但是K线重叠严重(Broadening)，这通常不是 Stage 1
+        if abs(norm_slope) > config.SLOPE_SPIKE_ATR and strong_momentum and not is_choppy:
             return "1-STRONG_TREND", ("BULL" if norm_slope > 0 else "BEAR")
 
         # Barbwire 检测 - 放在 Spike 之后，避免错过突破
@@ -81,18 +98,15 @@ class ContextService:
             # 如果 M5 压缩，尽量顺着 H1 的方向做突破
             return "4-BREAKOUT_MODE", (always_in_dir if always_in_dir != "NEUTRAL" else "BULL")
             
-        # Stage 3: Trading Range (M5 震荡)
-        # [关键修改] 如果 M5 是震荡，但 H1 趋势很强，这其实是 Stage 2 (通道/旗形)
-        is_m5_tr = abs(norm_slope) < config.SLOPE_FLAT_ATR or crossings >= config.AB_RANGE_CROSSINGS
+        # ---------------------------------------------------------
+        # [新增 3] 强制降级逻辑
+        # ---------------------------------------------------------
+        # 只要 混乱(Choppy) 或 斜率太平(Flat)，直接锁定 Stage 3
+        # 即使 H1 有方向，只要 M5 重叠严重，也不能做顺势回调(容易被打损)
+        is_flat = abs(norm_slope) < 0.25 # 放宽斜率判定 (原0.15太严)
         
-        if is_m5_tr:
-            if always_in_dir != "NEUTRAL":
-                # M5 震荡 + H1 有趋势 = 复杂回调 (Complex Pullback / Channel)
-                # 强制降级为 Channel，只做顺势
-                return "2-CHANNEL", always_in_dir
-            else:
-                # M5 震荡 + H1 也震荡 = 纯垃圾时间
-                return "3-TRADING_RANGE", "NEUTRAL"
+        if is_choppy or is_flat:
+            return "3-TRADING_RANGE", "NEUTRAL" # 强制 NEUTRAL，迫使 L5 执行高抛低吸
             
         # Stage 2: Channel (默认)
         return "2-CHANNEL", ("BULL" if norm_slope > 0 else "BEAR")

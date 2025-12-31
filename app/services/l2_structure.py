@@ -30,6 +30,14 @@ class StructureService:
             elif wedge_type == "BULL_WEDGE": # 楔形底 (看多)
                 setup = "WEDGE_BOTTOM"
         
+        
+        # ---------------------------------------------------------
+        # [新增] 环境过滤器
+        # ---------------------------------------------------------
+        # 如果 ATR 很大 (例如 > 3.0 美金)，说明是宽幅震荡/扩散形态
+        # 此时微观结构 (Micro Structure) 极易失效
+        is_high_volatility = atr > 3.0
+        
         # =========================================================
         # [原有] 顺势回调逻辑 (H1/H2) - 作为备选
         # =========================================================
@@ -46,14 +54,18 @@ class StructureService:
             
             # --- 多头逻辑 ---
             if trend_dir == "BULL":
-                # A. 标准突破 (破前高)
+                # A. 标准 H1
                 if last['high'] > prev['high']:
                     if is_bullish_signal:
                         setup = "H1"
-                        # 过滤: 离均线太远，H1 容易失败
+                        # [修正] 弱趋势过滤: 如果斜率不够陡，不要做 H1，只做 H2
+                        current_slope = abs(df['ema20'].iloc[-1] - df['ema20'].iloc[-4])
+                        if current_slope < (atr * 0.4): 
+                            setup = "WEAK_H1_WAIT_FOR_H2"
+                        
                         if dist_to_ema > (atr * config.AB_MAGNET_DISTANCE_ATR):
                             setup = "WEAK_H1_TOO_FAR"
-                        # 深度回调判定 (H2)
+                        # H2 逻辑
                         if last['low'] < (last['ema20'] - atr * 0.2):
                             setup = "H2"
                     else:
@@ -70,14 +82,22 @@ class StructureService:
                                       ((last['close'] - last['low']) > (last['high'] - last['low']) * 0.6)
 
                     if (is_matching_low or is_inside_bar) and is_strong_close:
-                        setup = "H1_MICRO_DB"
+                        # [关键修正] 高波动环境下禁用 Micro DB
+                        if is_high_volatility:
+                            setup = "MICRO_DB_FILTERED_BY_ATR"
+                        else:
+                            setup = "H1_MICRO_DB"
 
-            # --- 空头逻辑 ---
+            # --- 空头逻辑 (同理) ---
             elif trend_dir == "BEAR":
                 # A. 标准突破 (破前低)
                 if last['low'] < prev['low']:
                     if is_bearish_signal:
                         setup = "L1"
+                        current_slope = abs(df['ema20'].iloc[-1] - df['ema20'].iloc[-4])
+                        if current_slope < (atr * 0.4):
+                             setup = "WEAK_L1_WAIT_FOR_L2"
+
                         if dist_to_ema < -(atr * config.AB_MAGNET_DISTANCE_ATR):
                             setup = "WEAK_L1_TOO_FAR"
                         if last['high'] > (last['ema20'] + atr * 0.2):
@@ -93,7 +113,11 @@ class StructureService:
                                       ((last['high'] - last['close']) > (last['high'] - last['low']) * 0.6)
 
                     if (is_matching_high or is_inside_bar) and is_strong_close:
-                        setup = "L1_MICRO_DT"
+                        # [关键修正] 高波动环境下禁用 Micro DT
+                        if is_high_volatility:
+                            setup = "MICRO_DT_FILTERED_BY_ATR"
+                        else:
+                            setup = "L1_MICRO_DT"
 
         # --- [新增] 破坏性重置逻辑 ---
         # 如果我们正在寻找多头信号 (H1/H2)，但眼前这根是巨大的阴线趋势棒

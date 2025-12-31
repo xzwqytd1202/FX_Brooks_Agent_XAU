@@ -47,6 +47,16 @@ class ExecutionService:
         if stage == "0-BARBWIRE":
             return "HOLD", 0.0, 0.0, 0.0, 0.0, "Barbwire_Chop"
 
+        # ---------------------------------------------------------
+        # [新增 1] 普遍风控: 禁止追高潮 (Climax Protection)
+        # ---------------------------------------------------------
+        # 如果信号棒太巨大 (比如 > 3倍 ATR)，往往是行情的终点而非起点
+        # Al Brooks: "Don't buy at the top of a buy climax."
+        if is_huge_bar:
+             # 除非是极强的 Stage 1 刚启动，否则过滤
+             if "1-STRONG_TREND" in stage:
+                 return "HOLD", 0.0, 0.0, 0.0, 0.0, "Filter_Climax_Bar_Too_Big"
+
         # --- Stage 1: Spike (强趋势) ---
         if "1-STRONG_TREND" in stage:
             # A. 顺势逻辑 (原有: Stop Order 追单)
@@ -267,6 +277,19 @@ class ExecutionService:
             range_low = min([c.low for c in recent_bars])
             mm_height = max(range_high - range_low, atr)
             target_dist = mm_height * 2.0 
+
+            # ---------------------------------------------------------
+            # [新增 2] 假突破过滤 (Breakout Trap Protection)
+            # ---------------------------------------------------------
+            # 如果 ATR 很大 (> 3.0)，说明处于宽幅震荡/扩散中
+            # 此时顺势突破 (MM_Target) 胜率极低，只做反转 (Reversal)
+            is_high_volatility = atr > 3.0
+            
+            # 判断是否是反转 Setup (Wedge / MTR)
+            is_reversal_setup = "WEDGE" in setup_type or "MTR" in setup_type
+            
+            if is_high_volatility and not is_reversal_setup:
+                 return "HOLD", 0.0, 0.0, 0.0, 0.0, "Filter_High_ATR_Breakout" 
 
             if trend_dir == "BULL":
                 action = "PLACE_BUY_STOP"
