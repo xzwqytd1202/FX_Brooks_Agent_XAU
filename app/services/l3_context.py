@@ -44,9 +44,14 @@ class ContextService:
             overlap_h = min(curr['high'], prev['high'])
             overlap_l = max(curr['low'], prev['low'])
             
-            # 如果重叠部分存在，且幅度较大 (例如 > 0，这里只要重叠就算)
+            # [修正] 必须是显著重叠 (>30% 当根K线幅度) 才算 Choppy
+            # 仅仅一点点触碰不算，那是正常的趋势回调
+            bar_range = curr['high'] - curr['low']
             if overlap_h > overlap_l:
-                overlap_count += 1
+                overlap_amp = overlap_h - overlap_l
+                # 如果重叠幅度超过当根 K 线幅度的 30%，才算有效重叠
+                if bar_range > 0 and (overlap_amp / bar_range) > 0.3:
+                    overlap_count += 1
                 
         # 判定标准: 10根里有6根以上重叠，或者穿越均线次数过多
         is_choppy = overlap_count >= 6 or crossings >= 4
