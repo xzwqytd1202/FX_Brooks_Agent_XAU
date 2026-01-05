@@ -32,6 +32,59 @@ class ExecutionService:
     def generate_order(self, stage, trend_dir, setup_type, df, candles, atr):
         signal_bar = candles[-1]
         
+        # =========================================================
+        # [新增] Module 3: Entry Filters (入场过滤器)
+        # =========================================================
+        
+        # 1. 弱通道保护 (Weak Channel Protection)
+        # 防止在通道底部追空，或通道顶部追多
+        if stage == "2-CHANNEL":
+            recent_high = df['high'].tail(20).max()
+            recent_low = df['low'].tail(20).min()
+            channel_range = recent_high - recent_low
+            
+            if channel_range > 0:
+                current_price = df['close'].iloc[-1]
+                # 计算相对位置 (0.0 = Low, 1.0 = High)
+                relative_pos = (current_price - recent_low) / channel_range
+                
+                # 如果是空头趋势，且价格在通道下轨附近 (下 25%)，禁止追空 (Stop单)
+                if trend_dir == "BEAR" and relative_pos < 0.25:
+                    if "L" in setup_type: # L1, L2 等做空信号
+                        # 强制只能用 Limit 单 (逻辑在后面生成订单时处理，这里先标记)
+                        return "HOLD", 0.0, 0.0, 0.0, 0.0, "FILTER:Weak_Channel_Low_Pos"
+                
+                # 如果是多头趋势，且价格在通道上轨附近 (上 25%)，禁止追多
+                if trend_dir == "BULL" and relative_pos > 0.75:
+                    if "H" in setup_type:
+                        return "HOLD", 0.0, 0.0, 0.0, 0.0, "FILTER:Weak_Channel_High_Pos"
+
+        # 2. Stage 3 (震荡) 只能做 Limit 单，禁止 Stop 单
+        if stage == "3-TRADING_RANGE":
+            # 如果主要信号是 H1/L1 (主要是顺势突破)，在震荡市里胜率极低
+            # 震荡市只能做高抛低吸 (Fade) 或者是特定的 Reversal Setup
+            allow_trade = False
+            
+            # 允许的 Setup: Wedge, Micro DB/DT (Limit entry)
+            if "WEDGE" in setup_type or "MICRO" in setup_type or "MTR" in setup_type:
+                allow_trade = True
+            
+            if not allow_trade:
+                return "HOLD", 0.0, 0.0, 0.0, 0.0, f"FILTER:Stage3_No_Stop_Entry({setup_type})"
+
+        # 3. 整数关口保护 (Round Number)
+        # 避免在 4300, 4350 等整数关口附近做突破
+        current_close = df['close'].iloc[-1]
+        dist_to_round_100 = abs(current_close % 100)
+        dist_to_round_100 = min(dist_to_round_100, 100 - dist_to_round_100)
+        
+        # 如果距离整数关口 < 200 微点 (0.2 美金)，且是大关口
+        if dist_to_round_100 < 0.2:
+             return "HOLD", 0.0, 0.0, 0.0, 0.0, "FILTER:Too_Close_To_Round_Number"
+
+        # =========================================================
+        # 基础方向确认 (原有逻辑)
+        # =========================================================
         action = "HOLD"
         entry_price = 0.0
         sl = 0.0

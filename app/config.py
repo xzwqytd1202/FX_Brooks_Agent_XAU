@@ -9,7 +9,12 @@ IS_WINTER_TIME = True
 
 # 平台结算风控 (北京时间 05:00 - 07:00)
 ROLLOVER_START_H_BJ = 5  
-ROLLOVER_END_H_BJ = 7    
+ROLLOVER_END_H_BJ = 7
+
+# --- [新增] 交易时间过滤 (北京时间) ---
+# 禁止开单时段: 凌晨 03:00 - 早上 09:30 (低流动性 + 垃圾时间)
+NO_TRADE_START_H_BJ = 3
+NO_TRADE_END_H_BJ = 9.5  # 9:30 用小数表示    
 
 # --- [3] 资金管理 (固定风险模型) ---
 RISK_PER_TRADE_USD = 30.0  
@@ -46,10 +51,19 @@ AB_MAGNET_DISTANCE_ATR = 1.0
 SLOPE_SPIKE_ATR = 0.5   
 SLOPE_FLAT_ATR = 0.15   
 AB_RANGE_CROSSINGS = 5  
+AB_RANGE_CROSSINGS = 5  
 COMPRESSION_ATR = 3.0   
+
+# [新增] 阶段定义阈值 (10根K线幅度)
+# Stage 4 (极度压缩): 幅度 < 1.5 ATR
+STAGE4_THRESHOLD_ATR = 1.5
+# Stage 3 (震荡): 幅度 < 4.0 ATR (且 > 1.5 ATR)
+STAGE3_THRESHOLD_ATR = 4.0   
 
 # [L5] 挂单距离
 MIN_TICK_SIZE = 0.20 
 
 # 风控时间
 NEWS_PADDING_MINUTES = 30
+# [新增] 亏损/止损后冷却时间 (分钟)
+COOLDOWN_AFTER_LOSS_MINUTES = 15

@@ -86,79 +86,96 @@ def analyze_market(data: MarketData):
                      reason=f"TP_Partial_1ATR({dist_moved:.1f})"
                  )
 
-    # [新增] 移动止损逻辑 (Trailing Stop)
+    # 3. 分析流程 (提前执行，以便下面的 Trailing Stop 使用 Stage 信息)
+    m5_bars = data.m5_candles
+    
+    # [提前] L3 Context 计算
+    stage, trend_dir = l3_svc.identify_stage(df_m5, data.h1_candles, current_atr)
+
+    # [新增] 移动止损逻辑 (Stage-Based Trailing Stop)
+    # Module 4: Exit Strategy
     if data.current_positions:
         atr_val = current_atr
         for pos in data.current_positions:
-            # 计算当前利润距离 (点数)
+            dist_profit = 0.0
+            new_sl = 0.0
+            should_modify = False
+            reason_mod = ""
+
+            # 计算浮盈点数
             if pos.type == "BUY":
                 dist_profit = pos.current_price - pos.open_price
-                current_sl = pos.sl
-                
-                # 策略 A: 利润 > 1.5 ATR -> 移至保本 (入场价 + 0.1 ATR 覆盖手续费)
-                if dist_profit > (atr_val * 1.5):
-                    new_sl = pos.open_price + (atr_val * 0.1)
-                    # 只有当新止损比旧止损更高时才修改 (只上不以)
-                    if new_sl > current_sl + 0.05: # 0.05是防止微小频繁修改
-                         return SignalResponse(
-                             action="MODIFY_SL",
-                             ticket=pos.ticket,
-                             sl=new_sl,
-                             reason=f"Breakeven_1.5ATR"
-                         )
-                
-                # 策略 B: 利润 > 4.0 ATR -> 紧跟趋势 (现价 - 2.0 ATR)
-                # 保护类似截图中 30-40 美金的大利润
-                if dist_profit > (atr_val * 4.0):
-                    new_sl = pos.current_price - (atr_val * 2.0)
-                    if new_sl > current_sl + 0.05:
-                         return SignalResponse(
-                             action="MODIFY_SL",
-                             ticket=pos.ticket,
-                             sl=new_sl,
-                             reason=f"Trail_2ATR"
-                         )
-
-            # 空头同理 (逻辑反过来)
             elif pos.type == "SELL":
                 dist_profit = pos.open_price - pos.current_price
-                current_sl = pos.sl
-                
-                if dist_profit > (atr_val * 1.5):
-                    new_sl = pos.open_price - (atr_val * 0.1)
-                    if new_sl < current_sl - 0.05:
-                         return SignalResponse(
-                             action="MODIFY_SL",
-                             ticket=pos.ticket,
-                             sl=new_sl,
-                             reason=f"Breakeven_1.5ATR"
-                         )
-                         
-                if dist_profit > (atr_val * 4.0):
-                    new_sl = pos.current_price + (atr_val * 2.0)
-                    if new_sl < current_sl - 0.05:
-                         return SignalResponse(
-                             action="MODIFY_SL",
-                             ticket=pos.ticket,
-                             sl=new_sl,
-                             reason=f"Trail_2ATR"
-                         )
+            
+            # --- 策略分级 ---
+            
+            # 策略 A: Stage 1 (强趋势) -> 宽松止损，哪怕回撤也不怕
+            if "1-STRONG_TREND" in stage:
+                # 只有盈利 > 2.0 ATR 才开始保本/移动
+                if dist_profit > (atr_val * 2.0):
+                    # 留给它 1.5 ATR 的呼吸空间
+                    target_sl_dist = atr_val * 1.5
+                    if pos.type == "BUY": new_sl = pos.current_price - target_sl_dist
+                    else: new_sl = pos.current_price + target_sl_dist
+                    should_modify = True
+                    reason_mod = "Trail_S1_Loose"
 
-    # 最大持仓限制
+            # 策略 B: Stage 2 (通道) -> 标准止损
+            elif "2-CHANNEL" in stage:
+                # 盈利 > 1.5 ATR 保本
+                if dist_profit > (atr_val * 1.5):
+                    target_sl_dist = atr_val * 1.0 # 保持 1.0 ATR 距离
+                    if pos.type == "BUY": new_sl = pos.current_price - target_sl_dist
+                    else: new_sl = pos.current_price + target_sl_dist
+                    should_modify = True
+                    reason_mod = "Trail_S2_Std"
+                    
+            # 策略 C: Stage 3/4 (震荡/突破) -> 紧迫止损 (见好就收)
+            else: 
+                # 盈利 > 1.0 ATR 就赶紧保本
+                if dist_profit > (atr_val * 1.0):
+                    target_sl_dist = atr_val * 0.5 # 贴得很近 (0.5 ATR)
+                    if pos.type == "BUY": new_sl = pos.current_price - target_sl_dist
+                    else: new_sl = pos.current_price + target_sl_dist
+                    should_modify = True
+                    reason_mod = "Trail_S3_Tight"
+
+            # --- 执行修改 (只向有利方向移动) ---
+            if should_modify:
+                current_sl = pos.sl
+                if pos.type == "BUY":
+                    # 买单: 新止损必须 > 旧止损 + 阈值
+                    if new_sl > current_sl + 0.05:
+                        return SignalResponse(action="MODIFY_SL", ticket=pos.ticket, sl=new_sl, reason=reason_mod)
+                elif pos.type == "SELL":
+                    # 卖单: 新止损必须 < 旧止损 - 阈值 (注意 new_sl 越小越好，但这里是 SL 下移)
+                    # 修正: 卖单 SL 是向下移动才是盈利保护？不对，卖单 SL 是价格下跌后 SL 也下跌。
+                    # 所以新 SL 应该小于旧 SL。
+                    if current_sl == 0 or new_sl < current_sl - 0.05:
+                         return SignalResponse(action="MODIFY_SL", ticket=pos.ticket, sl=new_sl, reason=reason_mod)
+
+    # 最大持仓限制 & 反向加仓保护 (Anti-Pyramid)
     if current_pos_count >= config.MAX_POSITIONS_COUNT:
          return SignalResponse(action="HOLD", reason="Max_Pos_Reached")
+         
+    # [新增] 只有当所有持仓都盈利 > 1 ATR 或者 已经推了保本损，才允许加仓
+    # 只要有任何一笔持仓处于亏损状态 (且未被保护)，禁止开新仓 (防止亏损摊平)
+    for pos in data.current_positions:
+        if pos.profit < 0:
+            # 如果亏损，且没有 Comment 标记 (代表还没推保本?) 
+            # 简单粗暴点：只要有浮亏，就别加仓了
+            return SignalResponse(action="HOLD", reason=f"Block_Pyramid:Pos_{pos.ticket}_Loss")
     
-    # 3. 分析流程
-    m5_bars = data.m5_candles
+    # 3. 分析流程 (已在上方提前计算)
+    # m5_bars = data.m5_candles
     
     # L1: K 线特征分析 (用于增强日志)
     last_bar = m5_bars[-1]
     prev_bar = m5_bars[-2] if len(m5_bars) > 1 else None
     bar_analysis = l1_svc.analyze_bar(last_bar, prev_bar, current_atr)
     
-    # [修改] L3 传入 df_m5 和 h1_candles 以判断 Always In
-    # ContextService.identify_stage(self, df_m5, h1_candles, current_atr)
-    stage, trend_dir = l3_svc.identify_stage(df_m5, data.h1_candles, current_atr)
+    # [L3 已计算] stage, trend_dir = l3_svc.identify_stage...
     
     # [修改] L2 传入 df_m5
     # StructureService.update_counter(self, df, trend_dir, atr)

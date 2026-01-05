@@ -91,26 +91,34 @@ class ContextService:
         
         # Stage 1: Spike (必须同时满足不混乱)
         # 如果虽然斜率大，但是K线重叠严重(Broadening)，这通常不是 Stage 1
+        # ---------------------------------------------------------
+        # [修改] 阶段定义逻辑 (基于 ATR 幅度)
+        # ---------------------------------------------------------
+        range_10_bar = recent_high - recent_low
+        
+        # 定义状态
+        is_stage_4 = range_10_bar < (current_atr * config.STAGE4_THRESHOLD_ATR)
+        is_stage_3 = (current_atr * config.STAGE4_THRESHOLD_ATR) <= range_10_bar < (current_atr * config.STAGE3_THRESHOLD_ATR)
+        
+        # Stage 1: Spike (强趋势)
+        # 必须有斜率 + 动能 + 不混乱
         if abs(norm_slope) > config.SLOPE_SPIKE_ATR and strong_momentum and not is_choppy:
             return "1-STRONG_TREND", ("BULL" if norm_slope > 0 else "BEAR")
 
-        # Barbwire 检测 - 放在 Spike 之后，避免错过突破
+        # Barbwire 检测
         if is_barbwire:
             return "0-BARBWIRE", "NEUTRAL"
 
-        # Stage 4: Breakout Mode (M5 压缩)
-        if is_compressed:
-            # 如果 M5 压缩，尽量顺着 H1 的方向做突破
+        # Stage 4: Breakout Mode (极度压缩)
+        if is_stage_4:
+            # Stage 4 期间倾向于跟随 H1 方向，或者干脆不做 (WAIT)
             return "4-BREAKOUT_MODE", (always_in_dir if always_in_dir != "NEUTRAL" else "BULL")
             
-        # ---------------------------------------------------------
-        # [新增 3] 强制降级逻辑
-        # ---------------------------------------------------------
-        # 只要 混乱(Choppy) 或 斜率太平(Flat)，直接锁定 Stage 3
-        # 即使 H1 有方向，只要 M5 重叠严重，也不能做顺势回调(容易被打损)
-        is_flat = abs(norm_slope) < 0.25 # 放宽斜率判定 (原0.15太严)
+        # Stage 3: Trading Range (宽幅震荡)
+        # 如果是 Stage 3，或者之前被判定为 Choppy/Flat，都归为 Stage 3
+        is_flat = abs(norm_slope) < 0.25
         
-        if is_choppy or is_flat:
+        if is_stage_3 or is_choppy or is_flat:
             return "3-TRADING_RANGE", "NEUTRAL" # 强制 NEUTRAL，迫使 L5 执行高抛低吸
             
         # Stage 2: Channel (默认)

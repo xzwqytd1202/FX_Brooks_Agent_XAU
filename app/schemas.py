@@ -55,6 +55,11 @@ class MarketData(BaseModel):
     # 动态信息
     news_info: NewsInfo
     current_positions: List[Position]
+    
+    # [新增] 历史数据 (用于冷却逻辑)
+    # 如果没历史，传 0
+    last_closed_profit: Optional[float] = 0.0 
+    last_closed_time: Optional[int] = 0   # timestamp
 
 # --- 核心响应包 (Python -> MT5) ---
 
