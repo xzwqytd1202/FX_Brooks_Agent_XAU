@@ -30,6 +30,7 @@ class ContextService:
         recent_high = df['high'].tail(10).max()
         recent_low = df['low'].tail(10).min()
         is_compressed = (recent_high - recent_low) < (current_atr * config.COMPRESSION_ATR)
+        is_deep_compressed = (recent_high - recent_low) < (current_atr * config.COMPRESSION_ATR_BARBWIRE)
         
         # ---------------------------------------------------------
         # [新增 1] 重叠度计算 (Choppiness Index) - 震荡的DNA
@@ -57,8 +58,9 @@ class ContextService:
         is_choppy = overlap_count >= 6 or crossings >= 4
 
         # [原有] Barbwire 检测 (增强版: 结合 Choppy)
+        # 必须是深度压缩 + 混乱
         is_barbwire = False
-        if is_choppy and is_compressed:
+        if is_choppy and is_deep_compressed:
              is_barbwire = True
         
         # 强趋势因子
@@ -80,11 +82,14 @@ class ContextService:
             h1_slope = (ema_now - ema_prev_2) / 2
             
             # [关键修正] 引入阈值 (0.2 ATR)，解决"永远不为0"的问题
-            # 这里简单用 M5 的 ATR 做参照，更严谨可用 H1 ATR
             h1_threshold = current_atr * 0.2
             
-            if h1_slope > h1_threshold: always_in_dir = "BULL"
-            elif h1_slope < -h1_threshold: always_in_dir = "BEAR"
+            # [新增] 必须配合 K 线位置确认 (过滤掉 EMA 虽然向上但价格都在下方的假突破)
+            price_above = df_h1['close'].iloc[-1] > df_h1['ema20'].iloc[-1]
+            price_below = df_h1['close'].iloc[-1] < df_h1['ema20'].iloc[-1]
+
+            if h1_slope > h1_threshold and price_above: always_in_dir = "BULL"
+            elif h1_slope < -h1_threshold and price_below: always_in_dir = "BEAR"
             else: always_in_dir = "NEUTRAL" # 只有这样，Stage 3 才有机会触发
 
         # --- 3. 综合阶段判定 ---
@@ -116,10 +121,17 @@ class ContextService:
             
         # Stage 3: Trading Range (宽幅震荡)
         # 如果是 Stage 3，或者之前被判定为 Choppy/Flat，都归为 Stage 3
-        is_flat = abs(norm_slope) < 0.25
+        # [精细化] 只有“乱”的Flat才是 Stage 3。如果“不乱”但Flat，通常是 Tight Channel (Stage 2)
+        is_flat = abs(norm_slope) < config.SLOPE_FLAT_ATR
         
-        if is_stage_3 or is_choppy or is_flat:
+        # 定义 Stage 3: 必须是 (Stage 3 定义满足) OR (混乱 + Flat) OR (多次穿越均线)
+        if is_stage_3 or (is_choppy and is_flat) or (crossings >= config.AB_RANGE_CROSSINGS):
             return "3-TRADING_RANGE", "NEUTRAL" # 强制 NEUTRAL，迫使 L5 执行高抛低吸
+            
+        # [新增] Tight Channel 识别: Flat 但不乱
+        if is_flat and not is_choppy:
+             # 这其实是一种特殊的 Channel (Weak Channel)，依然允许顺势
+             return "2-CHANNEL", ("BULL" if raw_slope > 0 else "BEAR")
             
         # Stage 2: Channel (默认)
         return "2-CHANNEL", ("BULL" if norm_slope > 0 else "BEAR")

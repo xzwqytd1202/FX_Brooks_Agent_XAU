@@ -1,5 +1,8 @@
 # app/services/global_risk.py
 from .. import config
+import logging
+
+logger = logging.getLogger(__name__)
 
 class GlobalRiskService:
     # [修改] 增加 current_atr 参数
@@ -11,14 +14,14 @@ class GlobalRiskService:
         if config.INITIAL_BALANCE > 0:
             drawdown = (config.INITIAL_BALANCE - data.account_equity) / config.INITIAL_BALANCE
             if drawdown >= config.MAX_DRAWDOWN_PERCENT:
-                return False, f"CIRCUIT_BREAKER:DD_{drawdown*100:.1f}%"
+                return self._log_and_return(False, f"CIRCUIT_BREAKER:DD_{drawdown*100:.1f}%", data)
         else:
             # 异常配置保护
-            return False, "CONFIG_ERROR:INITIAL_BALANCE_ZERO"
+            return self._log_and_return(False, "CONFIG_ERROR:INITIAL_BALANCE_ZERO", data)
             
         # 2. 保证金保护
         if 0 < data.margin_level < config.MIN_MARGIN_LEVEL:
-             return False, f"LOW_MARGIN:{data.margin_level:.0f}%"
+             return self._log_and_return(False, f"LOW_MARGIN:{data.margin_level:.0f}%", data)
 
         # --- [1] 北京时间换算逻辑 ---
         hour_diff = 6 if config.IS_WINTER_TIME else 5
@@ -32,31 +35,34 @@ class GlobalRiskService:
         # --- [新增] 交易时间过滤 (优先级最高，在 Rollover 之前) ---
         # 禁止在北京时间 03:00 - 09:30 开单
         if config.NO_TRADE_START_H_BJ <= current_bj_decimal < config.NO_TRADE_END_H_BJ:
-            return False, f"NO_TRADE_HOURS(BJ:{current_bj_h:02d}:{current_server_m:02d})"
+            return self._log_and_return(False, f"NO_TRADE_HOURS(BJ:{current_bj_h:02d}:{current_server_m:02d})", data)
         
         # Rollover 保护 (原有逻辑，使用整数小时判断)
         if config.ROLLOVER_START_H_BJ <= current_bj_h < config.ROLLOVER_END_H_BJ:
-             return False, f"ROLLOVER_TIME(BJ:{current_bj_h}h)"
+             return self._log_and_return(False, f"ROLLOVER_TIME(BJ:{current_bj_h}h)", data)
 
         # 3. [修改] 动态点差保护 (ATR Based)
         # 必须有有效的 ATR，否则用保底逻辑
         if current_atr and current_atr > 0:
-            # 允许最大点差 = ATR * 10% (例如 10美金ATR -> 允许1美金点差)
+            # 允许最大点差 = ATR * Ratio (例如 Ratio=0.2, ATR=5 -> 1.0美金)
             # 换算成微点: USD * 100 * 10 = USD * 1000
             max_spread_points = (current_atr * config.MAX_SPREAD_ATR_RATIO) * 1000
-            # 设定一个物理下限 (例如 200 微点)，防止死鱼盘无法开单
-            max_spread_points = max(200, max_spread_points)
+            
+            # 使用配置的物理下限 (例如 400 微点)，防止死鱼盘或标准账户无法开单
+            # EBC Standard Account 点差通常 > 250
+            max_spread_points = max(config.SPREAD_FLOOR_POINTS, max_spread_points)
             
             if data.spread > max_spread_points:
-                return False, f"HIGH_SPREAD({data.spread}>{max_spread_points:.0f})"
+                return self._log_and_return(False, f"HIGH_SPREAD({data.spread}>{max_spread_points:.0f})", data)
         else:
-            # ATR 无效时的保底 (500微点)
-            if data.spread > 500: return False, "HIGH_SPREAD_NO_ATR"
+            # ATR 无效时的保底 (使用配置下限的 1.5 倍)
+            if data.spread > (config.SPREAD_FLOOR_POINTS * 1.5): 
+                return self._log_and_return(False, "HIGH_SPREAD_NO_ATR", data)
 
         # 4. 新闻过滤
         if data.news_info.impact_level == 3:
             if abs(data.news_info.minutes_to_news) <= config.NEWS_PADDING_MINUTES:
-                return False, f"NEWS:{data.news_info.event_name}"
+                return self._log_and_return(False, f"NEWS:{data.news_info.event_name}", data)
 
         # 5. [新增] 亏损冷却 (Cooldown)
         # 如果上一笔交易是亏损 (profit < 0) 且距离现在不足 15 分钟
@@ -67,6 +73,11 @@ class GlobalRiskService:
                 current_ts = data.m5_candles[-1].time
                 # 15分钟 = 900秒
                 if (current_ts - data.last_closed_time) < (config.COOLDOWN_AFTER_LOSS_MINUTES * 60):
-                     return False, f"COOLDOWN_LOSS({data.last_closed_profit:.2f})"
+                     return self._log_and_return(False, f"COOLDOWN_LOSS({data.last_closed_profit:.2f})", data)
 
         return True, "SAFE"
+
+    def _log_and_return(self, result, reason, data):
+        if not result:
+            logger.info(f"[RISK_BLOCK] Reason: {reason} | Spread: {data.spread} | Time: {data.server_time_hour}:{data.server_time_minute:02d}")
+        return result, reason
