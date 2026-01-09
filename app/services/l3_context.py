@@ -97,17 +97,32 @@ class ContextService:
         # Stage 1: Spike (必须同时满足不混乱)
         # 如果虽然斜率大，但是K线重叠严重(Broadening)，这通常不是 Stage 1
         # ---------------------------------------------------------
-        # [修改] 阶段定义逻辑 (基于 ATR 幅度)
+        # [修改] 阶段定义逻辑 (基于 ATR 幅度 + Context)
         # ---------------------------------------------------------
         range_10_bar = recent_high - recent_low
         
+        # [Context] 计算相对实体大小 (Relative Body Size)
+        recent_bodies = (df['close'] - df['open']).abs().tail(10)
+        avg_body = recent_bodies.mean() if len(recent_bodies) > 0 else current_atr
+        
         # 定义状态
-        is_stage_4 = range_10_bar < (current_atr * config.STAGE4_THRESHOLD_ATR)
-        is_stage_3 = (current_atr * config.STAGE4_THRESHOLD_ATR) <= range_10_bar < (current_atr * config.STAGE3_THRESHOLD_ATR)
+        # [Context] Stage 4 (Breakout Mode): 不仅 ATR 小，还要相对实体紧凑 (Real Compression)
+        is_tight_relative = range_10_bar < (avg_body * config.STAGE4_RELATIVE_BODY_RATIO)
+        is_stage_4 = (range_10_bar < (current_atr * config.STAGE4_THRESHOLD_ATR)) and is_tight_relative
+        
+        # Stage 3 Range Condition (ATR Based)
+        is_in_range_context = (current_atr * config.STAGE4_THRESHOLD_ATR) <= range_10_bar < (current_atr * config.STAGE3_THRESHOLD_ATR)
+        is_stage_3 = is_in_range_context # Preliminary check
         
         # Stage 1: Spike (强趋势)
-        # 必须有斜率 + 动能 + 不混乱
-        if abs(norm_slope) > config.SLOPE_SPIKE_ATR and strong_momentum and not is_choppy:
+        # [Context] 动态阈值: 如果处于震荡区间(Range Context)，突破需要更强的斜率
+        req_slope = config.SLOPE_SPIKE_ATR
+        if is_in_range_context or is_choppy:
+            req_slope += config.SPIKE_FROM_RANGE_PENALTY # 0.5 + 0.2 = 0.7
+            
+        # 必须有斜率 + 动能 + 不混乱 (或者斜率极强 override 混乱)
+        # 如果 is_choppy 为真，通常不给 Trend，除非斜率超级大 (这里暂不 override not is_choppy 限制，保持保守)
+        if abs(norm_slope) > req_slope and strong_momentum and not is_choppy:
             return "1-STRONG_TREND", ("BULL" if norm_slope > 0 else "BEAR")
 
         # Barbwire 检测
@@ -122,7 +137,21 @@ class ContextService:
         # Stage 3: Trading Range (宽幅震荡)
         # 如果是 Stage 3，或者之前被判定为 Choppy/Flat，都归为 Stage 3
         # [精细化] 只有“乱”的Flat才是 Stage 3。如果“不乱”但Flat，通常是 Tight Channel (Stage 2)
-        is_flat = abs(norm_slope) < config.SLOPE_FLAT_ATR
+        # [L3] 环境定义阈值 (Dynamic)
+        # ---------------------------------------------------------
+        # 基础阈值
+        slope_threshold = config.SLOPE_FLAT_ATR
+        
+        # [Dynamic] 如果市场处于 Choppy (重叠度高) 状态，哪怕有一定斜率也可能是假突破
+        # 需要提高阈值，过滤掉这些噪音
+        if is_choppy:
+             slope_threshold *= config.CHOPS_SLOPE_MULTIPLIER # 0.20 -> 0.35
+             
+        # Stage 3: Trading Range (宽幅震荡)
+        # 如果是 Stage 3，或者之前被判定为 Choppy/Flat，都归为 Stage 3
+        # [精细化] 只有“乱”的Flat才是 Stage 3。如果“不乱”但Flat，通常是 Tight Channel (Stage 2)
+        # [修改] 使用动态阈值
+        is_flat = abs(norm_slope) < slope_threshold
         
         # 定义 Stage 3: 必须是 (Stage 3 定义满足) OR (混乱 + Flat) OR (多次穿越均线)
         if is_stage_3 or (is_choppy and is_flat) or (crossings >= config.AB_RANGE_CROSSINGS):

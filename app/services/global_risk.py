@@ -41,21 +41,30 @@ class GlobalRiskService:
         if config.ROLLOVER_START_H_BJ <= current_bj_h < config.ROLLOVER_END_H_BJ:
              return self._log_and_return(False, f"ROLLOVER_TIME(BJ:{current_bj_h}h)", data)
 
-        # 3. [修改] 动态点差保护 (ATR Based)
+        # 3. [修改] 动态点差保护 (ATR Based + Session Dynamic)
         # 必须有有效的 ATR，否则用保底逻辑
         if current_atr and current_atr > 0:
-            # 允许最大点差 = ATR * Ratio (例如 Ratio=0.2, ATR=5 -> 1.0美金)
-            # 换算成微点: USD * 100 * 10 = USD * 1000
-            max_spread_points = (current_atr * config.MAX_SPREAD_ATR_RATIO) * 1000
+            # [Dynamic] 根据时段调整 Ratio
+            # 默认 0.3
+            active_ratio = config.MAX_SPREAD_ATR_RATIO
             
-            # 使用配置的物理下限 (例如 400 微点)，防止死鱼盘或标准账户无法开单
-            # EBC Standard Account 点差通常 > 250
+            # Asian Session (0-9h): 放宽 (0.5)
+            if 0 <= current_bj_h < 9:
+                active_ratio = config.SESSION_ASIAN_SPREAD_FIX
+            # Core Session (14-22h): 收紧 (0.25)
+            elif 14 <= current_bj_h < 22:
+                active_ratio = config.SESSION_CORE_SPREAD_FIX
+                
+            # 计算允许最大点差
+            max_spread_points = (current_atr * active_ratio) * 1000
+            
+            # 使用配置的物理下限 (例如 800 微点)
             max_spread_points = max(config.SPREAD_FLOOR_POINTS, max_spread_points)
             
             if data.spread > max_spread_points:
-                return self._log_and_return(False, f"HIGH_SPREAD({data.spread}>{max_spread_points:.0f})", data)
+                return self._log_and_return(False, f"HIGH_SPREAD({data.spread}>{max_spread_points:.0f}|R:{active_ratio})", data)
         else:
-            # ATR 无效时的保底 (使用配置下限的 1.5 倍)
+            # ATR 无效时的保底
             if data.spread > (config.SPREAD_FLOOR_POINTS * 1.5): 
                 return self._log_and_return(False, "HIGH_SPREAD_NO_ATR", data)
 

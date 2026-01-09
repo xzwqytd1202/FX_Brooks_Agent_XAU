@@ -25,7 +25,8 @@ def run_diagnostic():
     
     # 2. Time Info
     now = datetime.datetime.now()
-    utc_now = datetime.datetime.utcnow()
+    # [Fix] utcnow is deprecated
+    utc_now = datetime.datetime.now(datetime.timezone.utc)
     print(f"Local Time: {now.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"UTC Time: {utc_now.strftime('%Y-%m-%d %H:%M:%S')}")
     
@@ -58,7 +59,7 @@ def run_diagnostic():
     print("="*50)
     print("Diagnosis Suggestions:")
     if config.SPREAD_FLOOR_POINTS >= 400:
-        print("* SPREAD_FLOOR_POINTS is set to 400. If EBC spreads are often > 40 pips, trades will be filtered.")
+        print(f"* SPREAD_FLOOR_POINTS is set to {config.SPREAD_FLOOR_POINTS}. Ensure EBC spreads are within this limit.")
     
     # Check if we are in trading hours
     bj_decimal = bj_h + (now.minute / 60.0)

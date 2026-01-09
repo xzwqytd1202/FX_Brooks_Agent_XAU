@@ -100,6 +100,24 @@ class ExecutionService:
         if stage == "0-BARBWIRE":
             return "HOLD", 0.0, 0.0, 0.0, 0.0, "Barbwire_Chop"
 
+        # [L1] 计算动态 Trend Bar 阈值
+        # ---------------------------------------------------------
+        # 基础因子
+        trend_bar_factor = config.AB_TREND_BAR_ATR_RATIO
+        
+        # [Dynamic] 震荡市需要更强的信号
+        if "3-TRADING_RANGE" in stage:
+            trend_bar_factor += config.RANGE_TREND_BAR_ADDON # 0.6 + 0.15 = 0.75
+        # [Dynamic] 强趋势中，连续的小阳线也是趋势
+        elif "1-STRONG_TREND" in stage:
+            trend_bar_factor -= config.TREND_S1_BAR_REDUCTION # 0.6 - 0.10 = 0.50
+            
+        trend_bar_size = atr * trend_bar_factor
+        
+        # 判断当前是否是趋势线
+        current_body = abs(signal_bar.close - signal_bar.open)
+        is_trend_bar = current_body > trend_bar_size
+
         # ---------------------------------------------------------
         # [新增 1] 普遍风控: 禁止追高潮 (Climax Protection)
         # ---------------------------------------------------------
