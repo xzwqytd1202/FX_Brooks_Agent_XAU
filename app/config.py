@@ -72,6 +72,10 @@ SPIKE_FROM_RANGE_PENALTY = 0.20 # 0.5 + 0.2 = 0.7 ATR Slope required
 # 已经在趋势中延续，只需要较小的动力
 SPIKE_CONTINUATION_BONUS = 0.10 # 0.5 - 0.1 = 0.4 ATR Slope required
 
+# [新增] Instant Stage 1 Parameters
+INSTANT_SPIKE_ATR = 2.5
+STRONG_CLOSE_RATIO = 0.8
+
 # [C3] K线力度 (Perception)
 # ------------------------------------------------------------------------------
 AB_TREND_BAR_ATR_RATIO = 0.6

@@ -118,14 +118,14 @@ class ExecutionService:
         current_body = abs(signal_bar.close - signal_bar.open)
         is_trend_bar = current_body > trend_bar_size
 
-        # ---------------------------------------------------------
         # [新增 1] 普遍风控: 禁止追高潮 (Climax Protection)
         # ---------------------------------------------------------
         # 如果信号棒太巨大 (比如 > 3倍 ATR)，往往是行情的终点而非起点
         # Al Brooks: "Don't buy at the top of a buy climax."
         if is_huge_bar:
-             # 除非是极强的 Stage 1 刚启动，否则过滤
-             if "1-STRONG_TREND" in stage:
+             # 修改: 如果是 Stage 1 (Strong Trend)，这通常是 Breakout，必须放行
+             # 只有非 Stage 1 的 Huge Bar 才被视为高潮耗尽 (Exhaustion)
+             if "1-STRONG_TREND" not in stage:
                  return "HOLD", 0.0, 0.0, 0.0, 0.0, "Filter_Climax_Bar_Too_Big"
 
         # --- Stage 1: Spike (强趋势) ---

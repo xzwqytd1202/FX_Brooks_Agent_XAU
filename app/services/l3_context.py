@@ -19,6 +19,44 @@ class ContextService:
         raw_slope = current_ema - prev_ema_3
         norm_slope = raw_slope / current_atr 
         
+        # ---------------------------------------------------------
+        # [新增] 快速通道：单根超级K线定性 (Instant Stage 1)
+        # ---------------------------------------------------------
+        last_bar = df_m5.iloc[-1]
+        body = abs(last_bar['close'] - last_bar['open'])
+        bar_height = last_bar['high'] - last_bar['low']
+        
+        # 1. 尺寸判定：是否是巨型趋势棒 (Super Trend Bar)
+        is_huge_bar = body > (current_atr * config.INSTANT_SPIKE_ATR)
+        
+        # 2. 质量判定：收盘是否极强 (收在最高点附近的 20% 区域)
+        # 对于阳线：(Close - Low) / Range > 0.8
+        token_close_strength = 0.0
+        if bar_height > 0:
+            if last_bar['close'] > last_bar['open']: # 阳线
+                token_close_strength = (last_bar['close'] - last_bar['low']) / bar_height
+            else: # 阴线
+                token_close_strength = (last_bar['high'] - last_bar['close']) / bar_height
+                
+        is_strong_close = token_close_strength > config.STRONG_CLOSE_RATIO
+        
+        # 3. 突破判定：是否突破了过去 20 根的高点 (Bull) 或 低点 (Bear)
+        # 这一步是为了过滤掉震荡区间内部的假突破，确保它是真正的 Breakout
+        recent_highs = df_m5['high'].iloc[-20:-1].max() # 不包含当前K线的过去高点
+        recent_lows = df_m5['low'].iloc[-20:-1].min()
+        
+        is_breakout_bull = (last_bar['close'] > recent_highs) and (last_bar['close'] > last_bar['open'])
+        is_breakout_bear = (last_bar['close'] < recent_lows) and (last_bar['close'] < last_bar['open'])
+
+        # --- 综合判定 ---
+        # 如果 K线巨大 + 收盘极强 + 发生突破 = 强制 Stage 1
+        # 这通常发生在消息面瞬间，指标(Slope)可能还来不及反应
+        if is_huge_bar and is_strong_close:
+            if is_breakout_bull:
+                return "1-STRONG_TREND", "BULL"
+            elif is_breakout_bear:
+                return "1-STRONG_TREND", "BEAR"
+
         # 穿越次数 & 压缩度
         crossings = 0
         for i in range(len(df)-20, len(df)):
@@ -122,7 +160,8 @@ class ContextService:
             
         # 必须有斜率 + 动能 + 不混乱 (或者斜率极强 override 混乱)
         # 如果 is_choppy 为真，通常不给 Trend，除非斜率超级大 (这里暂不 override not is_choppy 限制，保持保守)
-        if abs(norm_slope) > req_slope and strong_momentum and not is_choppy:
+        # [修改] 只有当 Strong Momentum 且 Slope 足够大 (且已包含Choppy Penalty) 时，可以忽略 is_choppy
+        if abs(norm_slope) > req_slope and strong_momentum:
             return "1-STRONG_TREND", ("BULL" if norm_slope > 0 else "BEAR")
 
         # Barbwire 检测
@@ -134,33 +173,33 @@ class ContextService:
             # Stage 4 期间倾向于跟随 H1 方向，或者干脆不做 (WAIT)
             return "4-BREAKOUT_MODE", (always_in_dir if always_in_dir != "NEUTRAL" else "BULL")
             
-        # Stage 3: Trading Range (宽幅震荡)
-        # 如果是 Stage 3，或者之前被判定为 Choppy/Flat，都归为 Stage 3
-        # [精细化] 只有“乱”的Flat才是 Stage 3。如果“不乱”但Flat，通常是 Tight Channel (Stage 2)
-        # [L3] 环境定义阈值 (Dynamic)
         # ---------------------------------------------------------
-        # 基础阈值
-        slope_threshold = config.SLOPE_FLAT_ATR
+        # [修改核心] Stage 3: Trading Range (宽幅震荡)
+        # ---------------------------------------------------------
         
-        # [Dynamic] 如果市场处于 Choppy (重叠度高) 状态，哪怕有一定斜率也可能是假突破
-        # 需要提高阈值，过滤掉这些噪音
+        # 1. 动态斜率阈值 (Dynamic Slope Threshold)
+        # 如果市场混乱 (Choppy)，我们需要更高的斜率才能确认为趋势，否则视为震荡
+        slope_threshold = config.SLOPE_FLAT_ATR # 默认为 0.20
         if is_choppy:
-             slope_threshold *= config.CHOPS_SLOPE_MULTIPLIER # 0.20 -> 0.35
-             
-        # Stage 3: Trading Range (宽幅震荡)
-        # 如果是 Stage 3，或者之前被判定为 Choppy/Flat，都归为 Stage 3
-        # [精细化] 只有“乱”的Flat才是 Stage 3。如果“不乱”但Flat，通常是 Tight Channel (Stage 2)
-        # [修改] 使用动态阈值
+            slope_threshold *= config.CHOPS_SLOPE_MULTIPLIER # 例如 0.20 * 1.5 = 0.30
+            
         is_flat = abs(norm_slope) < slope_threshold
+
+        # 2. 判定逻辑变更
         
-        # 定义 Stage 3: 必须是 (Stage 3 定义满足) OR (混乱 + Flat) OR (多次穿越均线)
-        if is_stage_3 or (is_choppy and is_flat) or (crossings >= config.AB_RANGE_CROSSINGS):
-            return "3-TRADING_RANGE", "NEUTRAL" # 强制 NEUTRAL，迫使 L5 执行高抛低吸
+        is_trading_range = False
+        
+        # 必须是 Flat (无方向) 才有资格叫 Trading Range
+        # 不论是仅仅幅度适中 (is_stage_3) 还是混乱 (is_choppy) 还是反复穿越 (crossings)
+        # 如果有明显斜率，那就是 Channel (Stage 2)
+        
+        if is_flat:
+            if is_stage_3 or is_choppy or (crossings >= config.AB_RANGE_CROSSINGS):
+                 is_trading_range = True
             
-        # [新增] Tight Channel 识别: Flat 但不乱
-        if is_flat and not is_choppy:
-             # 这其实是一种特殊的 Channel (Weak Channel)，依然允许顺势
-             return "2-CHANNEL", ("BULL" if raw_slope > 0 else "BEAR")
+        if is_trading_range:
+            return "3-TRADING_RANGE", "NEUTRAL"
             
-        # Stage 2: Channel (默认)
+        # Stage 2: Channel (默认归宿)
+        # 如果上面没被 Stage 1, 4, 0, 3 捕获，且有斜率，那就是通道
         return "2-CHANNEL", ("BULL" if norm_slope > 0 else "BEAR")
